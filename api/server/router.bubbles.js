@@ -38,78 +38,47 @@ async function replicatePredictFlexible(modelOrVersion, input){
   throw new Error('replicate_timeout');
 }
 
+async function llmText(prompt, temperature=0.7, max_tokens=700){
+  if(ANTHROPIC_API_KEY){
+    const body={ model: process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20240620', max_tokens, temperature, messages:[{role:'user',content:prompt}] };
+    const r=await fetch('https://api.anthropic.com/v1/messages',{ method:'POST', headers:{'x-api-key':ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01','content-type':'application/json'}, body:JSON.stringify(body) });
+    const j=await r.json(); return j?.content?.[0]?.text || j?.content?.map?.(c=>c?.text).join('\n') || '';
+  }
+  if(OPENAI_API_KEY){
+    const body={ model: process.env.OPENAI_MODEL || 'gpt-4o-mini', messages:[{role:'user',content:prompt}], temperature };
+    const j=await jsonFetch('https://api.openai.com/v1/chat/completions',{ method:'POST', headers:{'Authorization':`Bearer ${OPENAI_API_KEY}`,'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    return j.choices?.[0]?.message?.content || '';
+  }
+  if(OPENROUTER_API_KEY){
+    const body={ model: process.env.OPENROUTER_MODEL || 'mistralai/mixtral-8x7b-instruct', messages:[{role:'user',content:prompt}], temperature };
+    const j=await jsonFetch('https://openrouter.ai/api/v1/chat/completions',{ method:'POST', headers:{'Authorization':`Bearer ${OPENROUTER_API_KEY}`,'Content-Type':'application/json','HTTP-Referer':'https://hohl.rocks','X-Title':'hohl.rocks'}, body:JSON.stringify(body) });
+    return j.choices?.[0]?.message?.content || '';
+  }
+  throw new Error('no_llm_key');
+}
+
 // -------- Handlers --------
 const handlers = {
   async 'zeitreise-tagebuch'(payload){
-    const name = (payload?.input?.name||'') + '';
-    const jahr = (payload?.input?.jahr||'') + '';
-    const prompt = `Schreibe einen Tagebucheintrag auf Deutsch. Protagonist: ${name||'Alex'}. Jahr: ${jahr||'2084'}. 
+    const name = (payload?.input?.name||'Alex') + '';
+    const jahr = (payload?.input?.jahr||'2084') + '';
+    const prompt = `Schreibe einen Tagebucheintrag auf Deutsch. Protagonist: ${name}. Jahr: ${jahr}. 
 Stil: nahbar, detailreich, glaubwürdig. 180-260 Wörter.`;
-    if(ANTHROPIC_API_KEY){
-      const body={ model: process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20240620', max_tokens:512, temperature:0.8, messages:[{role:'user',content:prompt}] };
-      const r=await fetch('https://api.anthropic.com/v1/messages',{ method:'POST', headers:{'x-api-key':ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01','content-type':'application/json'}, body:JSON.stringify(body) });
-      const j=await r.json(); const text=j?.content?.[0]?.text || j?.content?.map?.(c=>c?.text).join('\n') || '';
-      return { type:'text', text };
-    }
-    if(OPENAI_API_KEY){
-      const body={ model: process.env.OPENAI_MODEL || 'gpt-4o-mini', messages:[{role:'user',content:prompt}], temperature:0.8 };
-      const j=await jsonFetch('https://api.openai.com/v1/chat/completions',{ method:'POST', headers:{'Authorization':`Bearer ${OPENAI_API_KEY}`,'Content-Type':'application/json'}, body:JSON.stringify(body) });
-      return { type:'text', text:j.choices?.[0]?.message?.content || '' };
-    }
-    if(OPENROUTER_API_KEY){
-      const body={ model: process.env.OPENROUTER_MODEL || 'mistralai/mixtral-8x7b-instruct', messages:[{role:'user',content:prompt}], temperature:0.8 };
-      const j=await jsonFetch('https://openrouter.ai/api/v1/chat/completions',{ method:'POST', headers:{'Authorization':`Bearer ${OPENROUTER_API_KEY}`,'Content-Type':'application/json','HTTP-Referer':'https://hohl.rocks','X-Title':'hohl.rocks'}, body:JSON.stringify(body) });
-      return { type:'text', text:j.choices?.[0]?.message?.content || '' };
-    }
-    throw new Error('no_llm_key');
+    return { type:'text', text: await llmText(prompt, 0.8, 520) };
   },
 
   async 'weltbau'(payload){
-    const stw = (payload?.input?.stichworte||'') + '';
-    const prompt = `Baue eine fiktive Welt (deutsch) aus diesen Stichworten: ${stw||'zwei Monde, Handelsrouten, Drachen'}. 
+    const stw = (payload?.input?.stichworte||'zwei Monde, Handelsrouten, Drachen') + '';
+    const prompt = `Baue eine fiktive Welt (deutsch) aus diesen Stichworten: ${stw}. 
 Gliedere in: Geografie, Gesellschaft, Technologie/Magie, Konflikte, Chancen.`;
-    if(OPENROUTER_API_KEY){
-      const body={ model: process.env.OPENROUTER_MODEL || 'mistralai/mixtral-8x7b-instruct', messages:[{role:'user',content:prompt}], temperature:0.7 };
-      const j=await jsonFetch('https://openrouter.ai/api/v1/chat/completions',{ method:'POST', headers:{'Authorization':`Bearer ${OPENROUTER_API_KEY}`,'Content-Type':'application/json','HTTP-Referer':'https://hohl.rocks','X-Title':'hohl.rocks'}, body:JSON.stringify(body) });
-      return { type:'text', text:j.choices?.[0]?.message?.content || '' };
-    }
-    if(OPENAI_API_KEY){
-      const body={ model: process.env.OPENAI_MODEL || 'gpt-4o-mini', messages:[{role:'user',content:prompt}], temperature:0.7 };
-      const j=await jsonFetch('https://api.openai.com/v1/chat/completions',{ method:'POST', headers:{'Authorization':`Bearer ${OPENAI_API_KEY}`,'Content-Type':'application/json'}, body:JSON.stringify(body) });
-      return { type:'text', text:j.choices?.[0]?.message?.content || '' };
-    }
-    if(ANTHROPIC_API_KEY){
-      const body={ model: process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20240620', max_tokens:700, temperature:0.7, messages:[{role:'user',content:prompt}] };
-      const r=await fetch('https://api.anthropic.com/v1/messages',{ method:'POST', headers:{'x-api-key':ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01','content-type':'application/json'}, body:JSON.stringify(body) });
-      const j=await r.json(); const text=j?.content?.[0]?.text || j?.content?.map?.(c=>c?.text).join('\n') || '';
-      return { type:'text', text };
-    }
-    throw new Error('no_llm_key');
+    return { type:'text', text: await llmText(prompt, 0.7, 700) };
   },
 
   async 'poesie-html'(payload){
     const thema = (payload?.input?.thema||'Herbst') + '';
     const prompt = `Schreibe ein sehr kurzes Gedicht (4 Verse) über "${thema}" auf Deutsch.
 Gib ausschließlich HTML zurück. Jeder Vers in <p>, farbig via inline style (unterschiedliche Farbtöne). Keine Skripte, nur HTML.`;
-    if(OPENAI_API_KEY){
-      const body={ model: process.env.OPENAI_MODEL || 'gpt-4o-mini', messages:[{role:'user',content:prompt}], temperature:0.9 };
-      const j=await jsonFetch('https://api.openai.com/v1/chat/completions',{ method:'POST', headers:{'Authorization':`Bearer ${OPENAI_API_KEY}`,'Content-Type':'application/json'}, body:JSON.stringify(body) });
-      const html=j.choices?.[0]?.message?.content || '';
-      return { type:'html', html };
-    }
-    if(ANTHROPIC_API_KEY){
-      const body={ model: process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20240620', max_tokens:400, temperature:0.9, messages:[{role:'user',content:prompt}] };
-      const r=await fetch('https://api.anthropic.com/v1/messages',{ method:'POST', headers:{'x-api-key':ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01','content-type':'application/json'}, body:JSON.stringify(body) });
-      const j=await r.json(); const html=j?.content?.[0]?.text || '';
-      return { type:'html', html };
-    }
-    if(OPENROUTER_API_KEY){
-      const body={ model: process.env.OPENROUTER_MODEL || 'mistralai/mixtral-8x7b-instruct', messages:[{role:'user',content:prompt}], temperature:0.9 };
-      const j=await jsonFetch('https://openrouter.ai/api/v1/chat/completions',{ method:'POST', headers:{'Authorization':`Bearer ${OPENROUTER_API_KEY}`,'Content-Type':'application/json','HTTP-Referer':'https://hohl.rocks','X-Title':'hohl.rocks'}, body:JSON.stringify(body) });
-      const html=j.choices?.[0]?.message?.content || '';
-      return { type:'html', html };
-    }
-    throw new Error('no_llm_key');
+    return { type:'html', html: await llmText(prompt, 0.9, 400) };
   },
 
   async 'bildgenerator'(payload){
@@ -120,18 +89,12 @@ Gib ausschließlich HTML zurück. Jeder Vers in <p>, farbig via inline style (un
       const modelOrVersion = REPLICATE_MODEL_VERSION || REPLICATE_SDXL_VERSION;
       if(!modelOrVersion) throw new Error('no_image_model_set');
       const isFlux = modelOrVersion.includes('flux');
-      const input = isFlux
-        ? { prompt, aspect_ratio: '3:2', output_format: 'png', seed: seed }
-        : { prompt, width: 768, height: 512, num_inference_steps: 30, seed: seed };
+      const input = isFlux ? { prompt, aspect_ratio: '3:2', output_format: 'png', seed }
+                           : { prompt, width: 768, height: 512, num_inference_steps: 30, seed };
       const result = await replicatePredictFlexible(modelOrVersion, input);
       let url=''; if(Array.isArray(result.output)) url=result.output[0]||''; else if(typeof result.output==='string') url=result.output;
       else if(result.output?.image) url=result.output.image;
       return { type:'image', url };
-    }
-    if(OPENAI_API_KEY){
-      const body={ model:'gpt-image-1', prompt, size:'1024x1024' };
-      const j=await jsonFetch('https://api.openai.com/v1/images/generations',{ method:'POST', headers:{'Authorization':`Bearer ${OPENAI_API_KEY}`,'Content-Type':'application/json'}, body:JSON.stringify(body) });
-      const url=j.data?.[0]?.url || ''; return { type:'image', url };
     }
     throw new Error('no_image_key');
   },
@@ -167,37 +130,73 @@ Gib ausschließlich HTML zurück. Jeder Vers in <p>, farbig via inline style (un
     const tasks = [];
     function pick(name){
       if(name.startsWith('claude') || name==='claude'){
-        if(!ANTHROPIC_API_KEY) return;
-        return async ()=>{
-          const body={ model: process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20240620', max_tokens:600, temperature:0.7, messages:[{role:'user',content:prompt}] };
-          const r=await fetch('https://api.anthropic.com/v1/messages',{ method:'POST', headers:{'x-api-key':ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01','content-type':'application/json'}, body:JSON.stringify(body) });
-          const j=await r.json(); const text=j?.content?.[0]?.text || j?.content?.map?.(c=>c?.text).join('\n') || '';
-          return { model:'Claude', text };
-        };
+        return async ()=>({ model:'Claude', text: await llmText(prompt, 0.7, 600) });
       }
       if(name.startsWith('gpt') || name==='openai' || name==='chatgpt'){
-        if(!OPENAI_API_KEY) return;
-        return async ()=>{
-          const body={ model: process.env.OPENAI_MODEL || 'gpt-4o-mini', messages:[{role:'user',content:prompt}], temperature:0.7 };
-          const j=await jsonFetch('https://api.openai.com/v1/chat/completions',{ method:'POST', headers:{'Authorization':`Bearer ${OPENAI_API_KEY}`,'Content-Type':'application/json'}, body:JSON.stringify(body) });
-          return { model:'GPT', text:j.choices?.[0]?.message?.content || '' };
-        };
+        return async ()=>({ model:'GPT', text: await llmText(prompt, 0.7, 600) });
       }
       if(name.startsWith('mistral') || name==='mistral'){
-        if(!OPENROUTER_API_KEY) return;
-        return async ()=>{
-          const body={ model: process.env.OPENROUTER_MODEL || 'mistralai/mixtral-8x7b-instruct', messages:[{role:'user',content:prompt}], temperature:0.7 };
-          const j=await jsonFetch('https://openrouter.ai/api/v1/chat/completions',{ method:'POST', headers:{'Authorization':`Bearer ${OPENROUTER_API_KEY}`,'Content-Type':'application/json','HTTP-Referer':'https://hohl.rocks','X-Title':'hohl.rocks'}, body:JSON.stringify(body) });
-          return { model:'Mistral (OpenRouter)', text:j.choices?.[0]?.message?.content || '' };
-        };
+        return async ()=>({ model:'Mistral (OpenRouter)', text: await llmText(prompt, 0.7, 600) });
       }
       return null;
     }
-    // default: alle verfügbaren
     const names = want.length ? want : ['claude','gpt','mistral'];
     for(const n of names){ const f=pick(n); if(f) tasks.push(f()); }
     const out = await Promise.all(tasks);
     return out.filter(Boolean);
+  },
+
+  async 'bibliothek-leben'(payload){
+    const w = (payload?.input?.waswaerewenn||'Ich hätte vor 10 Jahren eine andere Stadt gewählt') + '';
+    const prompt = `Du kuratierst die "Bibliothek ungelebter Leben". Erstelle auf Deutsch eine Buchkarte
+(1) Titel, (2) 5-Satz-Abstract, (3) Wendepunkt, (4) eine schmerzlich-schöne letzte Zeile – basierend auf: ${w}.`;
+    return { type:'text', text: await llmText(prompt, 0.75, 650) };
+  },
+
+  async 'gps-bewusstsein'(payload){
+    const ziel = (payload?.input?.ziel||'Kreuzung von Traum & Realität') + '';
+    const prompt = `Du bist ein GPS für Bewusstsein. Gib eine poetisch-präzise Wegbeschreibung in 7 Schritten
+zu "${ziel}" (deutsch), inkl. metaphorischer Landmarken und einer optionalen Umleitung.`;
+    return { type:'text', text: await llmText(prompt, 0.8, 580) };
+  },
+
+  async 'emotions-alchemist'(payload){
+    const von = (payload?.input?.von||'Frust') + '';
+    const zu  = (payload?.input?.zu ||'Neugier') + '';
+    const prompt = `Du bist Emotions-Alchemist. Transformiere "${von}" in "${zu}".
+Gib: (1) Formel, (2) Zutatenliste (3–5 Punkte), (3) Ritual in 6 Schritten, (4) Nachklang (2 Sätze). Deutsch.`;
+    return { type:'text', text: await llmText(prompt, 0.8, 620) };
+  },
+
+  async 'surrealismus-generator'(payload){
+    const obj = (payload?.input?.objekte||'Teekanne, Wecker, Schlüssel') + '';
+    const stil = (payload?.input?.stil||'Dalí modern, Neon, fotorealistisch') + '';
+    if(REPLICATE_API_TOKEN){
+      const modelOrVersion = REPLICATE_MODEL_VERSION || REPLICATE_SDXL_VERSION;
+      if(!modelOrVersion) throw new Error('no_image_model_set');
+      const isFlux = modelOrVersion.includes('flux');
+      const prompt = `Surrealistisches Kunstwerk: ${obj}. Stil: ${stil}. Ultra-detailliert, dramatisches Licht, Tiefenunschärfe.`;
+      const input = isFlux ? { prompt, aspect_ratio: '1:1', output_format: 'png' } : { prompt, width: 768, height: 768, num_inference_steps: 28 };
+      const result = await replicatePredictFlexible(modelOrVersion, input);
+      let url=''; if(Array.isArray(result.output)) url=result.output[0]||''; else if(typeof result.output==='string') url=result.output;
+      else if(result.output?.image) url=result.output.image;
+      return { type:'image', url };
+    }
+    throw new Error('no_image_key');
+  },
+
+  async 'rueckwaerts-zivilisation'(payload){
+    const fokus = (payload?.input?.fokus||'Architektur') + '';
+    const prompt = `Beschreibe eine Zivilisation, die absichtlich rückwärts durch die Zeit "aufsteigt".
+Fokus: ${fokus}. Nenne Gründe, Alltagspraktiken, Widersprüche, Chancen.`;
+    return { type:'text', text: await llmText(prompt, 0.75, 680) };
+  },
+
+  async 'philosophie-mentor'(payload){
+    const thema = (payload?.input?.thema||'Digitaler Minimalismus') + '';
+    const prompt = `Du bist ein altgriechischer Philosoph im Jahr 2025. Stelle mir in Charakter 3 sokratische Fragen zu "${thema}"
+und schließe mit einer kompakten Reflexion (3 Sätze). Deutsch.`;
+    return { type:'text', text: await llmText(prompt, 0.7, 480) };
   }
 };
 

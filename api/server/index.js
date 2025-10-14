@@ -1,4 +1,4 @@
-/* hohl.rocks API – v3.0.0 */
+/* hohl.rocks API – v4.0.0 */
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
