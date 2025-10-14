@@ -1,4 +1,4 @@
-/* hohl.rocks API – stable ESM imports (default) */
+/* hohl.rocks API – v4.2.0 */
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -7,7 +7,7 @@ import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 
 import newsRouter from './news.js';
-import bubbleRouter from './router.bubbles.js'; // <- erwartet default export
+import bubbleRouter from './router.bubbles.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -32,27 +32,27 @@ app.use(cors({
   methods: ['GET','HEAD','POST','OPTIONS'],
   credentials: false
 }));
-app.use((_, res, next) => { res.set('Vary', 'Origin'); next(); });
+app.use((_, res, next) => { res.set('Vary','Origin'); next(); });
 
 // health
-app.get('/healthz', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
-app.get('/readyz', (_req, res) => res.json({ ready: true }));
+app.get('/healthz', (_req,res)=>res.json({ ok:true, ts: new Date().toISOString() }));
+app.get('/readyz', (_req,res)=>res.json({ ready:true }));
 
 // API
 app.use('/api', rateLimit({ windowMs: 60_000, max: 120 }));
 app.use('/api/news', newsRouter);
 app.use('/api/bubble', bubbleRouter);
 
-// api 404
-app.use('/api', (_req, res) => res.status(404).json({ ok: false, error: 'not_found' }));
+// 404 under api
+app.use('/api', (_req,res)=>res.status(404).json({ ok:false, error:'not_found' }));
 
-// global error
-app.use((err, _req, res, _next) => {
-  console.error('[API] error:', err?.stack || err?.message || err);
-  res.status(500).json({ ok: false, error: 'internal_error' });
+// error
+app.use((err,_req,res,_next)=>{
+  console.error('[API] error:', err?.stack||err?.message||err);
+  res.status(500).json({ ok:false, error:'internal_error' });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, ()=>{
   console.log(`[hohl.rocks API] listening :${PORT}`);
   console.log(`[hohl.rocks API] allowed origins:`, ALLOWED.join(', '));
 });
