@@ -1,4 +1,5 @@
-/* hohl.rocks API – v2.1.0 */
+
+/* hohl.rocks API – v2.2.0 (Variant B: FLUX via REPLICATE_MODEL_VERSION) */
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
