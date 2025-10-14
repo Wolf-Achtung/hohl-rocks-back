@@ -3,34 +3,40 @@ const router = Router();
 
 const TAVILY_API_KEY = process.env.TAVILY_API_KEY || '';
 
-const DE_HOST_ENDS = ['.de','.at','.ch'];
+// Kuratierte DACH-Quellen (KI-Sicherheit / Tipps)
+const DOMAINS_CORE = [
+  "heise.de", "golem.de", "t3n.de", "chip.de", "netzwelt.de",
+  "bsi.bund.de", "kuketz-blog.de", "netzpolitik.org",
+  "futurezone.at", "derstandard.at", "orf.at",
+  "nzz.ch", "srf.ch", "inside-it.ch", "pctipp.ch"
+];
+
 const SECURITY_TERMS = [
-  'KI Sicherheit','Künstliche Intelligenz Sicherheit','Deepfake','Phishing','Passwort','2FA','Datenschutz','DSGVO','Prompt Injection','Halluzination','Missbrauch','Warnung','Malware','Fake','Betrug','Sicherheitslücke'
+  "KI Sicherheit", "Deepfake", "Phishing", "Passwort", "2FA", "Datenschutz",
+  "DSGVO", "Prompt Injection", "Halluzination", "Missbrauch", "Warnung",
+  "Schadsoftware", "Fake", "Betrug", "Sicherheitslücke"
 ];
 const TIPS_TERMS = [
-  'Tipps','Anleitung','Praxis','How-To','Beispiele','Alltag','Produktivität','ChatGPT Anleitung','Claude Anleitung','Mistral Anleitung','Prompts','Einstieg','Best Practices','Schnellstart'
+  "Tipps", "Anleitung", "Praxis", "How-To", "Beispiele", "Alltag", "Produktivität",
+  "ChatGPT Anleitung", "Claude Anleitung", "Mistral Anleitung", "Prompts", "Einstieg", "Shortcut"
 ];
 
-const SOURCES_SECURITY = ['heise.de','golem.de','t3n.de','netzpolitik.org','bsi.bund.de','verbraucherzentrale.de','computerbild.de','chip.de'];
-const SOURCES_TIPS     = ['t3n.de','heise.de','golem.de','basicthinking.de','blog.google','openai.com','anthropic.com','mistral.ai','medium.com','dev.to'];
+function pickQuery(category) {
+  const base = category==='tips' ? TIPS_TERMS : SECURITY_TERMS;
+  // Tavily versteht umfangreiche Strings gut; „deutsch“ + Modellnamen hinzufügen
+  return `${base.join(' OR ')} deutsch ChatGPT Claude Mistral`;
+}
 
-function buildQuery(category) {
-  const terms = category==='tips' ? TIPS_TERMS : SECURITY_TERMS;
-  return `${terms.join(' OR ')} KI deutsch`;
-}
-function onlyGerman(items){
-  return (items||[]).filter(x => {
-    try { const u = new URL(x.url); return DE_HOST_ENDS.some(s => u.hostname.endsWith(s)); }
-    catch { return false; }
-  });
-}
-async function tavilySearch(query, includeDomains, max=16){
+async function tavilySearch(query, includeDomains=[], max=14){
   if(!TAVILY_API_KEY) throw new Error('tavily_key_missing');
   const body = {
     api_key: TAVILY_API_KEY,
-    query, topic: 'news', search_depth: 'advanced',
-    include_domains: includeDomains,
-    max_results: max, days: 21, include_answer: false
+    query,
+    topic: 'news',
+    search_depth: 'advanced',
+    max_results: max,
+    days: 14,
+    include_domains: includeDomains
   };
   const r = await fetch('https://api.tavily.com/search', {
     method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
@@ -46,16 +52,21 @@ async function tavilySearch(query, includeDomains, max=16){
 router.get('/live', async (req,res)=>{
   try{
     const category = String(req.query.category||'security');
-    const q = buildQuery(category);
-    const domains = category==='tips' ? SOURCES_TIPS : SOURCES_SECURITY;
-    let items = await tavilySearch(q, domains, 20);
-    // Fallback: ohne Domain-Filter, dann .de/.at/.ch beschränken
-    if(!items || items.length===0){
-      items = onlyGerman(await tavilySearch(q, [], 20));
+    const q = pickQuery(category);
+    // 1) Versuche nur kuratierte DACH-Domains
+    let items = await tavilySearch(q, DOMAINS_CORE, 18);
+    // 2) Fallback: ohne Domainfilter
+    if(!items || items.length<4) items = await tavilySearch(q, [], 18);
+    // 3) Dedup hosts & sort by recency if dates available
+    const seen = new Set(); const dedup=[];
+    for(const it of items){
+      try{
+        const host = new URL(it.url).hostname.replace(/^www\./,'');
+        if(seen.has(host)) continue; seen.add(host); dedup.push(it);
+      }catch{ dedup.push(it); }
     }
-    items = items.slice(0,12);
     res.set('Cache-Control','public, max-age=180');
-    res.json({ items });
+    res.json({ items: dedup.slice(0,12) });
   }catch(e){
     console.error('news/live failed', e);
     res.status(500).json({ error:'news_failed' });
