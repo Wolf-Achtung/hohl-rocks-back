@@ -3,61 +3,58 @@ import { Router } from 'express';
 const router = Router();
 const TAVILY_API_KEY = process.env.TAVILY_API_KEY || '';
 
+// Domains to bias towards DACH/EU tech/policy
 const DACH_SITES = ['heise.de','golem.de','t3n.de','zeit.de','tagesschau.de','spiegel.de','handelsblatt.com','faz.net','br.de'];
-const EU_SITES = ['europa.eu','edpb.europa.eu','edps.europa.eu','eur-lex.europa.eu','parlament.europa.eu'];
-const AI_ACT_TERMS = ['EU AI Act','KI-Verordnung','Hochrisiko-KI','Transparenzpflicht','Konformitätsbewertung','CE-Kennzeichnung'];
+const EU_SITES = ['europa.eu','edpb.europa.eu','edps.europa.eu','eur-lex.europa.eu','europarl.europa.eu'];
+const AI_ACT_TERMS = ['EU AI Act','KI‑Verordnung','Hochrisiko‑KI','Transparenzpflicht','Konformitätsbewertung','CE‑Kennzeichnung'];
+const SAFETY_TERMS = ['Deepfake','Phishing','Passkeys','2FA','Sicherheit','Datenschutz','DSGVO','Leak','Missbrauch','Warnung'];
 
-function boostQuery(region='all'){
-  const base = AI_ACT_TERMS.join(' OR ');
+function q(region='all'){
+  const base = [...AI_ACT_TERMS, 'OpenAI', 'Anthropic', 'Google Gemini', 'LLM', 'KI', 'AI'].join(' OR ');
   if(region==='dach') return `${base} site:${DACH_SITES.join(' OR site:')}`;
   if(region==='eu') return `${base} site:${EU_SITES.join(' OR site:')}`;
   return base;
 }
-function dedupe(items){
-  const seen = new Set(); const out=[];
-  for(const it of items){
-    let host=''; try{ host=new URL(it.url).hostname.replace(/^www\./,''); }catch{}
-    const key=(String(it.title||'').toLowerCase().slice(0,160)+'|'+host);
-    if(seen.has(key)) continue; seen.add(key); out.push(it);
-  } return out;
+
+function uniq(items){
+  const seen = new Set();
+  return items.filter(x => {
+    try {
+      const u = new URL(x.url);
+      const k = u.hostname + '|' + (x.title||'').trim();
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    } catch { return false; }
+  });
 }
 
-// Simple in-memory cache
-const cache = new Map(); // key -> {ts,data}
-const TTL = 1000 * 120; // 2 minutes
+async function tavily(query, max=10){
+  if (!TAVILY_API_KEY) return [];
+  const r = await fetch('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key: TAVILY_API_KEY, query, topic:'news', search_depth:'basic', max_results:max })
+  });
+  if (!r.ok) throw new Error(`tavily_${r.status}`);
+  const j = await r.json().catch(()=>({}));
+  const items = Array.isArray(j.results) ? j.results.map(x => ({
+    title: x.title, url: x.url, snippet: x.content, published: x.published_date || null
+  })) : [];
+  return items;
+}
 
-router.get('/news/live', async (req, res) => {
+// /api/news/live?q=...&region=dach|eu|all
+router.get('/live', async (req, res) => {
   try {
-    const region = (req.query.region || 'all').toString();
-    const key = `live:${region}`;
-    const now = Date.now();
-    const hit = cache.get(key);
-    if(hit && now - hit.ts < TTL){
-      res.set('X-Cache','HIT'); res.set('Cache-Control','public, max-age=60');
-      return res.json(hit.data);
-    }
-
-    const q = boostQuery(region);
-    if(!TAVILY_API_KEY) return res.json({ items: [] });
-    const r = await fetch('https://api.tavily.com/search',{
-      method:'POST',
-      headers:{'content-type':'application/json'},
-      body: JSON.stringify({
-        api_key: TAVILY_API_KEY,
-        query: q,
-        search_depth: 'advanced',
-        max_results: 24
-      })
-    });
-    const j = await r.json().catch(()=>({}));
-    const itemsRaw = Array.isArray(j.results) ? j.results.map(x => ({
-      title: x.title, url: x.url, snippet: x.content, published: x.published_date || null
-    })) : [];
-    const items = dedupe(itemsRaw);
-    const payload = { items };
-    cache.set(key, { ts: now, data: payload });
-    res.set('X-Cache','MISS'); res.set('Cache-Control','public, max-age=120');
-    res.json(payload);
+    const qUser = String(req.query.q || '').trim();
+    const region = String(req.query.region || 'dach');
+    const query = qUser || q(region);
+    const main = await tavily(query, 12);
+    const safety = await tavily(`${SAFETY_TERMS.join(' OR ')} site:${DACH_SITES.join(' OR site:')}`, 6);
+    const items = uniq([...(main||[]), ...(safety||[])]).slice(0, 12);
+    res.set('Cache-Control','public, max-age=120');
+    res.json({ items });
   } catch (e) {
     console.error('news/live failed', e);
     res.status(500).json({ error: 'tavily_failed' });

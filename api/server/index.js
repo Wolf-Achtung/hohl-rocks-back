@@ -1,4 +1,4 @@
-/* hohl.rocks API – integrated in back repo – v1.5.0 */
+/* hohl.rocks API – v2.0.0 */
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -10,47 +10,52 @@ import newsRouter from './news.js';
 const app = express();
 app.set('trust proxy', 1);
 
-const ALLOWED = String(process.env.ALLOWED_ORIGINS || '')
+const NODE_ENV = process.env.NODE_ENV || 'production';
+const PORT = process.env.PORT || 8080;
+const ALLOWED = String(process.env.ALLOWED_ORIGINS || 'http://localhost:8888,https://hohl.rocks,https://www.hohl.rocks')
   .split(',').map(s => s.trim().replace(/\/$/, '')).filter(Boolean);
 
-const isAllowed = (origin) => {
-  if (!origin) return true; // server-to-server, curl, health checks
-  try { return ALLOWED.includes(new URL(origin).origin); } catch { return false; }
-};
-
+// basic security
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(express.json({ limit: '1mb' }));
-app.use(morgan('combined'));
 app.use(compression());
-app.use(cors({
-  origin: (origin, cb) => cb(null, isAllowed(origin)),
-  methods: ['GET','HEAD','OPTIONS'],
+app.use(morgan(NODE_ENV === 'production' ? 'combined' : 'dev'));
+
+// CORS (origin allowlist)
+const corsOpts = {
+  origin(origin, cb) {
+    if (!origin) return cb(null, true);
+    try {
+      const o = new URL(origin).origin.replace(/\/$/, '');
+      cb(null, ALLOWED.includes(o));
+    } catch {
+      cb(null, false);
+    }
+  },
+  methods: ['GET', 'HEAD', 'OPTIONS'],
   credentials: false
-}));
-app.use((_, res, next) => { res.set('Vary','Origin'); next(); });
+};
+app.use(cors(corsOpts));
+app.use((_, res, next) => { res.set('Vary', 'Origin'); next(); });
 
-// Health (root + alias under /api)
-const health = (_req, res) => res.json({ ok: true, version: '1.5.0' });
-app.get('/healthz', health);
-app.get('/api/healthz', health);
+// health endpoints
+app.get('/healthz', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
+app.get('/readyz', (_req, res) => res.json({ ready: true }));
 
-// Diagnostics
-app.get('/api/ping', (_req, res) => {
-  res.json({ ok: true, tavily: !!process.env.TAVILY_API_KEY, allowed: ALLOWED });
-});
+// API
+app.use('/api', rateLimit({ windowMs: 60_000, max: 120 }));
+app.use('/api/news', newsRouter);
 
-// Rate limit only for api
-app.use('/api', rateLimit({ windowMs: 60_000, max: 90 }));
-app.use('/api', newsRouter);
-
-// Not found (api only)
+// 404 for api
 app.use('/api', (_req, res) => res.status(404).json({ ok: false, error: 'not_found' }));
 
-// Error handler
+// global error
 app.use((err, _req, res, _next) => {
-  console.error('Unhandled error:', err?.message || err);
+  console.error('Unhandled error:', err?.stack || err?.message || err);
   res.status(500).json({ ok: false, error: 'internal_error' });
 });
 
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`hohl.rocks API up on :${PORT}`));
+app.listen(PORT, () => {
+  console.log(`[hohl.rocks API] listening on :${PORT}`);
+  console.log('[hohl.rocks API] allowed origins =>', ALLOWED.join(', '));
+});
