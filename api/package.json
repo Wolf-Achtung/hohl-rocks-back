@@ -1,12 +1,14 @@
 {
   "name": "hohl.rocks-api",
-  "version": "5.0.0",
+  "version": "5.0.1",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=18.17" },
+  "engines": {
+    "node": ">=18.17"
+  },
   "scripts": {
-    "start": "node api/server/index.js",
-    "dev": "NODE_ENV=development node api/server/index.js"
+    "start": "node server/index.js",
+    "dev": "NODE_ENV=development node server/index.js"
   },
   "dependencies": {
     "compression": "^1.7.4",
@@ -14,7 +16,6 @@
     "express": "^4.19.2",
     "express-rate-limit": "^7.3.2",
     "helmet": "^7.0.0",
-    "morgan": "^1.10.0",
-    "node-fetch": "^3.3.2"
+    "morgan": "^1.10.0"
   }
 }
