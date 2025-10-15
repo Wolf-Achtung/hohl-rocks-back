@@ -1,33 +1,63 @@
 import { Router } from 'express';
+import { llmText as _llmText } from './share.llm.js';
 
 const router = Router();
 
-const PPLX_KEY = process.env.PERPLEXITY_API_KEY || '';
-const PPLX_MODEL = process.env.PERPLEXITY_MODEL || 'sonar';
-const BLOCK = (process.env.RESEARCH_BLOCK || '').toLowerCase() === 'true';
-const ALLOW = (process.env.RESEARCH_ALLOW || 'true').toLowerCase() !== 'false';
+const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY || '';
+const PERPLEXITY_MODEL   = process.env.PERPLEXITY_MODEL || 'sonar';
+const TAVILY_API_KEY     = process.env.TAVILY_API_KEY || '';
 
-function guard(res){
-  if(BLOCK || !ALLOW) { res.status(403).json({error:'research_blocked'}); return true; }
-  if(!PPLX_KEY){ res.status(200).json({note:'perplexity_key_missing'}); return true; }
-  return false;
+async function tavilySearch(query, maxResults = 8){
+  if(!TAVILY_API_KEY) return [];
+  const body = { api_key: TAVILY_API_KEY, query, max_results: maxResults, include_answer: false, search_depth: 'advanced' };
+  const r = await fetch('https://api.tavily.com/search', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+  });
+  if(!r.ok) return [];
+  const j = await r.json();
+  return (j.results||[]).map(it=>({ title: it.title, url: it.url })).filter(it=>!!it.url);
 }
 
-router.get('/answer', async (req,res)=>{
+async function perplexityResearch(q){
+  const body = {
+    model: PERPLEXITY_MODEL,
+    messages: [
+      { role:'system', content:'Du bist ein präziser Recherche‑Assistent. Antworte auf Deutsch. Liste die Quellen als Links auf.'},
+      { role:'user', content: q }
+    ],
+    return_citations: true
+  };
+  const r = await fetch('https://api.perplexity.ai/chat/completions', {
+    method:'POST',
+    headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+PERPLEXITY_API_KEY },
+    body: JSON.stringify(body)
+  });
+  if(!r.ok) throw new Error('perplexity_http_'+r.status);
+  const j = await r.json();
+  const text = j?.choices?.[0]?.message?.content || '';
+  const cit = j?.citations || j?.choices?.[0]?.message?.citations || [];
+  const sources = Array.isArray(cit) ? cit.map(u=>({ title: u, url: u })).slice(0,10) : [];
+  return { answer: text, sources };
+}
+
+router.post('/', async (req,res)=>{
   try{
-    if(guard(res)) return;
-    const q = (req.query.q||'').toString().slice(0,400);
-    if(!q) return res.status(400).json({error:'missing_q'});
-    const body = { model: PPLX_MODEL, messages:[{role:'user', content:q}] };
-    const r = await fetch('https://api.perplexity.ai/chat/completions', {
-      method:'POST', headers:{'Authorization': 'Bearer '+PPLX_KEY, 'Content-Type':'application/json'},
-      body: JSON.stringify(body)
-    });
-    const j = await r.json();
-    res.json({ text: j?.choices?.[0]?.message?.content || '' });
+    const q = (req.body?.q||'').trim();
+    if(!q) return res.status(400).json({ error:'missing_query' });
+    if(PERPLEXITY_API_KEY){
+      const out = await perplexityResearch(q);
+      res.set('Cache-Control','public, max-age=60');
+      return res.json(out);
+    }
+    // Fallback: Tavily + LLM summarize
+    const results = await tavilySearch(q, 8);
+    const ctx = results.map((r,i)=>`[${i+1}] ${r.title} – ${r.url}`).join('\n');
+    const prompt = `Fasse folgende Quellen prägnant zusammen (Deutsch) und gib 5 Bulletpoints + 3 Links:\n${ctx}`;
+    const answer = await _llmText(prompt, 0.3, 400, [{role:'user', content: prompt}], 'Du bist ein präziser Recherche‑Assistent.');
+    return res.json({ answer, sources: results });
   }catch(e){
-    console.error('research/answer failed', e);
-    res.status(500).json({error:'research_failed'});
+    console.error('research error', e);
+    res.status(500).json({ error: e?.message || 'research_failed' });
   }
 });
 
