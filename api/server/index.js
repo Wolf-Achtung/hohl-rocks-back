@@ -1,4 +1,4 @@
-/* hohl.rocks API – v5.0 (Gold) */
+/* hohl.rocks API – v5.0.1 (Gold) */
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -57,7 +57,7 @@ app.get('/healthz', (_req,res)=> res.json({ ok: true, now: Date.now(), env: NODE
 // --- API routes ---
 app.use('/api/news', newsRouter);
 app.use('/api/research', researchRouter);
-app.use('/api', bubbleRouter); // /api/run + /api/bubble/:id
+app.use('/api', bubbleRouter);
 
 // 404 under /api
 app.use('/api', (_req,res)=>res.status(404).json({ ok:false, error:'not_found' }));

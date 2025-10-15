@@ -56,7 +56,6 @@ router.get('/daily', async (_req,res)=>{
   }
 });
 
-// 30 inspirierende Prompts
 router.get('/top', (_req,res)=>{
   res.json([
     { "title": "Der Zeitreise-Tagebuch-Editor", "prompt": "Du bist ein Zeitreise-Editor. Ich gebe dir ein normales Tagebuch aus 2024, und du schreibst es um, als würde es aus dem Jahr 2084 stammen. Berücksichtige technologische Entwicklungen, gesellschaftliche Veränderungen und neue Probleme, die wir heute noch nicht kennen. Behalte die emotionale Authentizität bei, aber transformiere alle Referenzen." },

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { llmText as sharedLLM } from './share.llm.js';
+import { llmText as callLLM } from './share.llm.js';
 
 const router = Router();
 
@@ -51,42 +51,6 @@ function normalizeForProvider(provider, messages=[], system){
   }
   const msgs = sys ? [{role:'system', content: sys}, ...msgsNoSys] : msgsNoSys;
   return { messages: msgs, system: undefined };
-}
-
-async function llmText(prompt, temperature=0.7, max_tokens=700, messages=null, system=null){
-  const provider = pickLLM();
-  const baseMsgs = messages || [{role:'user',content:prompt}];
-  const norm = normalizeForProvider(provider, baseMsgs, system);
-
-  if(provider==='anthropic'){
-    const body={ model: CLAUDE_MODEL, max_tokens, temperature, messages: norm.messages, ...(norm.system?{system:norm.system}:{}) };
-    const r=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{ 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version':'2023-06-01','content-type':'application/json' },
-      body:JSON.stringify(body)
-    });
-    const j=await r.json();
-    return j?.content?.map?.(c=>c?.text).join('') || '';
-  }
-  if(provider==='openai'){
-    const body={ model: OPENAI_MODEL, messages: norm.messages, temperature, max_tokens };
-    const j=await jsonFetch('https://api.openai.com/v1/chat/completions',{
-      method:'POST',
-      headers:{ 'Authorization':'Bearer '+OPENAI_API_KEY },
-      body:JSON.stringify(body)
-    });
-    return j.choices?.[0]?.message?.content || '';
-  }
-  if(provider==='openrouter'){
-    const body={ model: OPENROUTER_MODEL, messages: norm.messages, temperature };
-    const j=await jsonFetch('https://openrouter.ai/api/v1/chat/completions',{
-      method:'POST',
-      headers:{ 'Authorization':'Bearer '+OPENROUTER_API_KEY, 'HTTP-Referer':'https://hohl.rocks','X-Title':'hohl.rocks' },
-      body:JSON.stringify(body)
-    });
-    return j.choices?.[0]?.message?.content || '';
-  }
-  throw new Error('no_llm_key');
 }
 
 async function llmStreamSSE(res, prompt, temperature=0.7, max_tokens=700, messages=null, system=null){
@@ -162,7 +126,7 @@ async function llmStreamSSE(res, prompt, temperature=0.7, max_tokens=700, messag
     }
 
     // Fallback one-shot
-    const text = await llmText(prompt, temperature, max_tokens, baseMsgs, system);
+    const text = await callLLM(prompt, temperature, max_tokens, baseMsgs, system);
     send({delta: text}); send({done:true}); res.end();
   }catch(err){
     send({error: err.message || 'stream_failed'}); res.end();
@@ -226,8 +190,6 @@ const IDEA_TEMPLATES = {
 };
 
 // ---- routes ----
-
-// SSE unified run (text streaming preferred)
 router.post('/run', async (req,res)=>{
   try{
     const id = String(req.body?.id||'').trim();
@@ -251,7 +213,6 @@ router.post('/run', async (req,res)=>{
   }
 });
 
-// Legacy JSON route
 router.post('/bubble/:id', async (req,res)=>{
   try{
     const id = String(req.params.id||'').trim();
@@ -270,13 +231,12 @@ function ideaHandler(id){
     const tpl = IDEA_TEMPLATES[id];
     const system = 'Du bist Claude/Assistant, antworte präzise, bildhaft und auf Deutsch.';
     if(preview) return { stream:true, prompt: tpl, temperature:0.8, max_tokens:700, system };
-    const text = await llmText(tpl, 0.8, 700, toMessages(thread, tpl), system);
+    const text = await callLLM(tpl, 0.8, 700, toMessages(thread, tpl), system);
     return { type:'text', text };
   };
 }
 
 const handlers = {
-  // 30 "idea-*" Prompts
   'idea-zeitreise-editor': ideaHandler('idea-zeitreise-editor'),
   'idea-rueckwaerts-zivilisation': ideaHandler('idea-rueckwaerts-zivilisation'),
   'idea-bewusstsein-gebaeude': ideaHandler('idea-bewusstsein-gebaeude'),
@@ -308,7 +268,6 @@ const handlers = {
   'idea-paradox-loesungszentrum': ideaHandler('idea-paradox-loesungszentrum'),
   'idea-universums-uebersetzer': ideaHandler('idea-universums-uebersetzer'),
 
-  // Kern-Bubbles
   async 'zeitreise-tagebuch'({input, preview, thread}){
     const name = (input?.name||'Alex') + '';
     const jahr = (input?.jahr||'2084') + '';
@@ -316,7 +275,7 @@ const handlers = {
 Protagonist: ${name}. Jahr: ${jahr}. Stil: nahbar, detailreich, glaubwürdig. 180–260 Wörter.`;
     const system = 'Du schreibst präzise, menschlich, mit filmischen Details.';
     if(preview) return { stream:true, prompt, temperature:0.8, max_tokens:520, system };
-    return { type:'text', text: await llmText(prompt, 0.8, 520, toMessages(thread, prompt), system) };
+    return { type:'text', text: await callLLM(prompt, 0.8, 520, toMessages(thread, prompt), system) };
   },
   async 'weltbau'({input, preview, thread}){
     const regeln = (input?.regelwerk||'Energie als Währung; Erinnerungen steuerbar; Schwerkraft flackert') + '';
@@ -325,7 +284,7 @@ Gib 7 Regeln in Bulletpoints (je max. 14 Wörter), eine kurze Konflikt-These und
 Regeln: ${regeln}`;
     const system = 'Klar, knapp, bildhaft, filmisch.';
     if(preview) return { stream:true, prompt, temperature:0.7, max_tokens:650, system };
-    return { type:'text', text: await llmText(prompt, 0.7, 650, toMessages(thread, prompt), system) };
+    return { type:'text', text: await callLLM(prompt, 0.7, 650, toMessages(thread, prompt), system) };
   },
   async 'poesie-html'({input, preview, thread}){
     const thema = (input?.thema||'Herbstregen') + '';
@@ -333,7 +292,7 @@ Regeln: ${regeln}`;
 4–7 Zeilen. Verwende <em>, <strong>, <mark> sparsam und Inline‑Style für Farbverläufe. Thema: ${thema}.`;
     const system = 'Ästhetisch, minimalistisch, keine Skripte.';
     if(preview) return { stream:true, prompt, temperature:0.9, max_tokens:200, system };
-    const html = await llmText(prompt, 0.9, 220, toMessages(thread, prompt), system);
+    const html = await callLLM(prompt, 0.9, 220, toMessages(thread, prompt), system);
     return { type:'html', html };
   },
   async 'bild-generator'({input}){
@@ -361,8 +320,3 @@ Regeln: ${regeln}`;
 };
 
 export default router;
-
-// Local bridge to shared impl
-async function llmText(prompt, t, maxTokens, msgs, sys){
-  return sharedLLM(prompt, t, maxTokens, msgs, sys);
-}
