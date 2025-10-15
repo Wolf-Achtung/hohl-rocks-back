@@ -1,4 +1,4 @@
-# hohl.rocks API – Docker (multi-stage)
+# hohl.rocks API – Docker (multi-stage, ready/healthz)
 FROM node:20-slim AS base
 ENV NODE_ENV=production
 WORKDIR /app
