@@ -18,19 +18,12 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'mistralai/mistral-7b-instruct:free';
 
 // ---- helpers ----
-async function jsonFetch(url, opt){
-  const r = await fetch(url, { ...opt, headers: { 'Content-Type':'application/json', ...(opt?.headers||{}) } });
-  if(!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
-}
-
 function pickLLM(){
   if(ANTHROPIC_API_KEY) return 'anthropic';
   if(OPENAI_API_KEY) return 'openai';
   if(OPENROUTER_API_KEY) return 'openrouter';
   return null;
 }
-
 function toMessages(thread, userContent){
   const msgs = [];
   (Array.isArray(thread)?thread:[]).forEach(m=>{
@@ -40,7 +33,6 @@ function toMessages(thread, userContent){
   msgs.push({role:'user', content: userContent});
   return msgs;
 }
-
 function normalizeForProvider(provider, messages=[], system){
   const sysMsgs = (messages||[]).filter(m=>m.role==='system').map(m=>m.content);
   const sys = [system, ...sysMsgs].filter(Boolean).join('\n');
@@ -53,7 +45,7 @@ function normalizeForProvider(provider, messages=[], system){
   return { messages: msgs, system: undefined };
 }
 
-// --- convenience: GET /api/run -> usage hint so Browser nicht 404 zeigt ---
+// --- convenience: GET /api/run -> usage hint ---
 router.get('/run', (_req,res)=>{
   res.json({
     ok: true,
@@ -66,6 +58,7 @@ router.get('/run', (_req,res)=>{
   });
 });
 
+// ---- SSE streaming ----
 async function llmStreamSSE(res, prompt, temperature=0.7, max_tokens=700, messages=null, system=null){
   const provider = pickLLM();
   const baseMsgs = messages || [{role:'user', content: prompt}];
@@ -146,7 +139,7 @@ async function llmStreamSSE(res, prompt, temperature=0.7, max_tokens=700, messag
   }
 }
 
-// ---- media helpers via Replicate ----
+// ---- Replicate helpers ----
 async function replicateRun(version, input){
   if(!REPLICATE_API_TOKEN) throw new Error('replicate_key_missing');
   const r = await fetch('https://api.replicate.com/v1/predictions', {
@@ -168,7 +161,7 @@ async function replicateRun(version, input){
   return j.output;
 }
 
-// ---- Idea Templates (30 Stück) ----
+// ---- 30 Idea Templates ----
 const IDEA_TEMPLATES = {
   'idea-zeitreise-editor': "Du bist ein Zeitreise-Editor. Ich gebe dir ein normales Tagebuch aus 2024, und du schreibst es um, als würde es aus dem Jahr 2084 stammen. Berücksichtige technologische Entwicklungen, gesellschaftliche Veränderungen und neue Probleme, die wir heute noch nicht kennen. Behalte die emotionale Authentizität bei, aber transformiere alle Referenzen.",
   'idea-rueckwaerts-zivilisation': "Beschreibe eine Zivilisation, die sich rückwärts durch die Zeit entwickelt – sie beginnt technologisch hochentwickelt und wird mit jedem Jahrhundert primitiver. Erkläre ihre Philosophie, warum sie diesen Weg gewählt haben, und wie ihr Alltag aussieht.",
@@ -202,7 +195,7 @@ const IDEA_TEMPLATES = {
   'idea-universums-uebersetzer': "Du übersetzt zwischen verschiedenen Realitätsebenen. Erkläre Quantenphysik in der Sprache von Märchen, übersetze menschliche Emotionen in Musik, und verwandle abstrakte mathematische Konzepte in Geschichten über lebende Wesen."
 };
 
-// ---- routes ----
+// ---- Routen ----
 router.post('/run', async (req,res)=>{
   try{
     const id = String(req.body?.id||'').trim();

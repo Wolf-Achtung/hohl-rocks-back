@@ -58,13 +58,18 @@ const limiter = rateLimit({
 app.use('/api', limiter);
 
 // --- Healthz & Readyz ---
-app.get('/healthz', (_req,res)=> res.type('application/json; charset=utf-8').json({ ok: true, now: Date.now(), env: NODE_ENV }));
+app.get('/healthz', (_req,res)=>
+  res.type('application/json; charset=utf-8')
+     .json({ ok: true, now: Date.now(), env: NODE_ENV })
+);
 
-function withTimeout(promise, ms){
+function withTimeout(promiseFn, ms){
   const ctrl = new AbortController();
   const t = setTimeout(()=>ctrl.abort(), ms);
-  return Promise.race([promise(ctrl.signal), new Promise((_,rej)=>rej(new Error('timeout'))) ])
-    .finally(()=>clearTimeout(t));
+  return Promise.race([
+    promiseFn(ctrl.signal),
+    new Promise((_,rej)=>rej(new Error('timeout')))
+  ]).finally(()=>clearTimeout(t));
 }
 
 async function pingAnthropic(signal){
@@ -76,7 +81,7 @@ async function pingAnthropic(signal){
       signal
     });
     return r.ok ? 'ok' : 'http_'+r.status;
-  }catch(e){ return 'err'; }
+  }catch{ return 'err'; }
 }
 async function pingOpenAI(signal){
   if(!OPENAI_API_KEY) return 'skipped';
@@ -118,13 +123,11 @@ app.get('/readyz', async (_req,res)=>{
       },
       external: {}
     };
-    // concurrent pings with 1500ms timeout each (only where keys exist)
     const anthropic = await withTimeout((signal)=>pingAnthropic(signal), 1500).catch(()=> 'err');
     const openai    = await withTimeout((signal)=>pingOpenAI(signal), 1500).catch(()=> 'err');
     const tavily    = await withTimeout((signal)=>pingTavily(signal), 1500).catch(()=> 'err');
     result.external = { anthropic, openai, tavily };
 
-    // Mark not-ok if keine LLM Keys vorhanden
     if(!result.keys.llm) result.ok = false;
 
     res.type('application/json; charset=utf-8').json(result);

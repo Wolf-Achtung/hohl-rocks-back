@@ -52,9 +52,14 @@ export async function llmText(prompt, temperature=0.7, max_tokens=700, messages=
   }
   if(provider==='openrouter'){
     const body={ model: OPENROUTER_MODEL, messages: norm.messages, temperature };
-    const r = await fetch('https://openrouter.ai/api/v1/chat/completions',{
+    const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method:'POST',
-      headers:{ 'Authorization':'Bearer '+OPENROUTER_API_KEY, 'HTTP-Referer':'https://hohl.rocks','X-Title':'hohl.rocks','Content-Type':'application/json' },
+      headers:{
+        'Authorization':'Bearer '+OPENROUTER_API_KEY,
+        'HTTP-Referer':'https://hohl.rocks',
+        'X-Title':'hohl.rocks',
+        'Content-Type':'application/json'
+      },
       body: JSON.stringify(body)
     });
     const j = await r.json();
