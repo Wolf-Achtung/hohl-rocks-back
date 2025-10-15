@@ -4,7 +4,7 @@ import { llmText as _llmText } from './share.llm.js';
 const router = Router();
 
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY || '';
-const PERPLEXITY_MODEL   = process.env.PERPLEXITY_MODEL || 'sonar';
+const PERPLEXITY_MODEL   = process.env.PERPLEXITY_MODEL || 'sonar-pro';
 const TAVILY_API_KEY     = process.env.TAVILY_API_KEY || '';
 
 async function tavilySearch(query, maxResults = 8){

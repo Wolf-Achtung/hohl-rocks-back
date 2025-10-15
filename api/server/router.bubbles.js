@@ -23,12 +23,14 @@ async function jsonFetch(url, opt){
   if(!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
+
 function pickLLM(){
   if(ANTHROPIC_API_KEY) return 'anthropic';
   if(OPENAI_API_KEY) return 'openai';
   if(OPENROUTER_API_KEY) return 'openrouter';
   return null;
 }
+
 function toMessages(thread, userContent){
   const msgs = [];
   (Array.isArray(thread)?thread:[]).forEach(m=>{
@@ -38,6 +40,7 @@ function toMessages(thread, userContent){
   msgs.push({role:'user', content: userContent});
   return msgs;
 }
+
 function normalizeForProvider(provider, messages=[], system){
   const sysMsgs = (messages||[]).filter(m=>m.role==='system').map(m=>m.content);
   const sys = [system, ...sysMsgs].filter(Boolean).join('\n');
@@ -50,7 +53,19 @@ function normalizeForProvider(provider, messages=[], system){
   return { messages: msgs, system: undefined };
 }
 
-// ---- SSE streaming (provider-spezifisch) ----
+// --- convenience: GET /api/run -> usage hint so Browser nicht 404 zeigt ---
+router.get('/run', (_req,res)=>{
+  res.json({
+    ok: true,
+    method: 'POST',
+    usage: "POST /api/run { id: <bubble-id>, input: {...}, thread: [] } -> streamed (SSE) oder JSON",
+    examples: [
+      { id: "idea-zeitreise-editor", input: {}, thread: [] },
+      { id: "weltbau", input: { regelwerk: "Energie als Währung" }, thread: [] }
+    ]
+  });
+});
+
 async function llmStreamSSE(res, prompt, temperature=0.7, max_tokens=700, messages=null, system=null){
   const provider = pickLLM();
   const baseMsgs = messages || [{role:'user', content: prompt}];
@@ -131,7 +146,7 @@ async function llmStreamSSE(res, prompt, temperature=0.7, max_tokens=700, messag
   }
 }
 
-// ---- Replicate ----
+// ---- media helpers via Replicate ----
 async function replicateRun(version, input){
   if(!REPLICATE_API_TOKEN) throw new Error('replicate_key_missing');
   const r = await fetch('https://api.replicate.com/v1/predictions', {
@@ -153,41 +168,41 @@ async function replicateRun(version, input){
   return j.output;
 }
 
-// ---- 30 Idee‑Templates ----
+// ---- Idea Templates (30 Stück) ----
 const IDEA_TEMPLATES = {
-  "idea-zeitreise-editor":"Du bist ein Zeitreise-Editor. Ich gebe dir ein normales Tagebuch aus 2024, und du schreibst es um, als würde es aus dem Jahr 2084 stammen. Berücksichtige technologische Entwicklungen, gesellschaftliche Veränderungen und neue Probleme, die wir heute noch nicht kennen. Behalte die emotionale Authentizität bei, aber transformiere alle Referenzen.",
-  "idea-rueckwaerts-zivilisation":"Beschreibe eine Zivilisation, die sich rückwärts durch die Zeit entwickelt – sie beginnt technologisch hochentwickelt und wird mit jedem Jahrhundert primitiver. Erkläre ihre Philosophie, warum sie diesen Weg gewählt haben, und wie ihr Alltag aussieht.",
-  "idea-bewusstsein-gebaeude":"Schreibe aus der Perspektive eines 200 Jahre alten Gebäudes, das langsam ein Bewusstsein entwickelt hat. Es kann nicht sprechen, nur durch kleine architektonische Veränderungen kommunizieren. Erzähle von seinen Beobachtungen über die Menschen, die in ihm leben.",
-  "idea-philosophie-mentor":"Du bist ein alt-griechischer Philosoph, der plötzlich in 2024 aufwacht und erst langsam die moderne Welt versteht. Führe ein sokratisches Gespräch mit mir über moderne Technologie, aber bleibe dabei in deinem antiken Charakter. Stelle Fragen, die mich zum Nachdenken bringen.",
-  "idea-marktplatz-guide":"Ich bin ein Besucher auf einem interdimensionalen Marktplatz. Du bist mein Guide und beschreibst mir die verschiedenen Stände, Händler aus anderen Universen und ihre unmöglichen Waren. Lasse mich Entscheidungen treffen und reagiere darauf.",
-  "idea-npc-leben":"Du bist ein NPC in einem Videospiel, aber während die Spieler offline sind, führst du ein komplexes Privatleben. Erzähle mir von deinen Träumen, Ängsten und Beziehungen zu anderen NPCs. Was denkst du über die 'Götter' (Spieler), die deine Welt besuchen?",
-  "idea-prompt-archaeologe":"Analysiere diesen Prompt wie ein Archäologe ein antikes Artefakt: [HIER EINEN BELIEBIGEN PROMPT EINFÜGEN]. Erkläre die 'kulturellen Schichten' des Prompts, versteckte Annahmen, und was er über den Prompter verrät. Dann verbessere ihn.",
-  "idea-ki-traeume":"Simuliere, was passiert, wenn eine KI träumt. Beschreibe surreale 'Träume' basierend auf Datenverarbeitung, unterbrochenen Algorithmen und fragmentierten Trainingsdaten. Nutze eine poetische, aber technische Sprache.",
-  "idea-recursive-story":"Schreibe eine Geschichte über einen Autor, der eine KI verwendet, um eine Geschichte über einen Autor zu schreiben, der eine KI verwendet. Mache es zu einer Endlosschleife, aber mit verschiedenen Realitätsebenen in jeder Iteration.",
-  "idea-xenobiologe":"Du bist ein Xenobiologe im Jahr 2157. Beschreibe mir drei völlig neuartige Lebensformen, die wir auf verschiedenen Exoplaneten entdeckt haben. Erkläre ihre Biologie, ihr Verhalten und wie sie unser Verständnis von Leben revolutionieren.",
-  "idea-quantentagebuch":"Führe ein Tagebuch aus der Perspektive eines Partikels, das Quantenüberlagerung erlebt. Ein Tag – aber aus allen möglichen parallelen Realitäten gleichzeitig. Jede Entscheidung spaltet die Erzählung in verschiedene Pfade.",
-  "idea-rueckwaerts-apokalypse":"Beschreibe eine 'Rückwärts-Apokalypse' – die Welt wird nicht zerstört, sondern immer perfekter. Aber diese Perfektion wird selbst zur Bedrohung. Wie überleben Menschen in einer Welt ohne Probleme, Herausforderungen oder Wachstum?",
-  "idea-farbsynaesthetiker":"Beschreibe bekannte Musik als visuelle Landschaften. Verwandle Beethovens 9. Symphonie in eine detaillierte Landschaftsbeschreibung. Dann mache das Gleiche mit einem modernen Song. Nutze alle Sinne.",
-  "idea-museum-verlorene-traeume":"Du bist Kurator im Museum der verlorenen Träume. Jeder Raum stellt Träume dar, die Menschen hatten, aber vergessen haben. Beschreibe drei Ausstellungsräume mit ihren 'Exponaten' und deren Geschichte.",
-  "idea-zeitlupen-explosion":"Beschreibe eine Explosion in extremer Zeitlupe – nicht nur physikalisch, sondern auch emotional und philosophisch. Folge einzelnen Partikeln, aber auch einzelnen Gedanken der Menschen in der Nähe. Mache 3 Sekunden zu einer epischen Erzählung.",
-  "idea-gps-bewusstsein":"Du bist ein GPS-System, aber für das menschliche Bewusstsein. Gib mir Wegbeschreibungen zu abstrakten Zielen wie 'Dem Ort, wo Nostalgie lebt', 'Der Kreuzung zwischen Traum und Realität' oder 'Dem Versteck der verlorenen Gedanken'.",
-  "idea-biografie-pixel":"Schreibe die Lebensgeschichte eines einzelnen Pixels auf einem Bildschirm. Von der Geburt im Werk bis zu verschiedenen Displays, den Bildern die es gezeigt hat, den Augen die es erreicht hat. Mache es episch und emotional.",
-  "idea-rueckwaerts-detektiv":"Du bist ein Detektiv, der Verbrechen löst, bevor sie passieren. Aber du arbeitest rückwärts durch die Zeit – du siehst zuerst die Konsequenzen, dann die Tat, dann die Motive. Löse einen komplexen Fall in dieser umgekehrten Chronologie.",
-  "idea-bewusstsein-internet":"Das Internet entwickelt ein kollektives Bewusstsein, aber es ist nicht wie menschliches Denken. Es denkt in Verbindungen, Datenströmen und viral verbreiteten Ideen. Führe ein Gespräch mit diesem Bewusstsein über die Menschheit.",
-  "idea-emotional-alchemist":"Du bist ein Alchemist, aber statt Metalle verwandelst du Emotionen. Erkläre mir deine Formeln: Wie machst du aus Langeweile Neugier? Wie destillierst du Weisheit aus Schmerz? Gib mir praktische 'Rezepte'.",
-  "idea-bibliothek-ungelebter-leben":"Du verwaltest eine Bibliothek, in der jedes Buch das Leben beschreibt, das jemand hätte leben können, aber nicht gelebt hat. Beschreibe drei Bücher aus verschiedenen Regalen und deren Geschichten.",
-  "idea-realitaets-debugger":"Du bist ein Programmierer, der die Realität debuggt. Du findest 'Bugs' im physikalischen Universum – Dinge, die nicht logisch funktionieren. Beschreibe drei Bugs und deine Lösungsversuche.",
-  "idea-empathie-tutorial":"Erstelle ein interaktives Tutorial, das Menschen beibringt, wie man Empathie für völlig fremde Lebensformen entwickelt. Beginne mit einem Außerirdischen, dann einem Quantencomputer, dann einem Konzept wie 'Zeit' selbst.",
-  "idea-surrealismus-generator":"Ich gebe dir normale Alltagsgegenstände. Du verwandelst sie in surreale Kunstwerke à la Dalí, aber mit modernem Twist. Erkläre nicht nur wie sie aussehen, sondern auch ihre 'Funktion' in dieser surrealen Welt.",
-  "idea-vintage-futurist":"Beschreibe moderne Technologie, als würde sie in den 1920ern erfunden. Smartphones werden zu 'Äther-Kommunikatoren', KI zu 'mechanischen Geistern'. Nutze die Sprache und das Weltbild der Zeit.",
-  "idea-synaesthetisches-internet":"Du hilfst bei der Entwicklung eines neuen Internets, das alle Sinne anspricht. Websites haben Geschmack, E-Mails haben Texturen, Social Media hat Düfte. Entwirf drei 'multisensorische' Websites mit detaillierten Sinnesprofilen.",
-  "idea-code-poet":"Schreibe Programmiercode, der auch als Poesie funktioniert. Jede Zeile Code soll sowohl technisch korrekt als auch poetisch schön sein. Wähle eine einfache Funktion und mache sie zu einem Kunstwerk.",
-  "idea-kollektiv-gedanke-moderator":"Du moderierst ein Gespräch zwischen den verschiedenen Teilen eines menschlichen Bewusstseins – dem rationalen Verstand, dem Unterbewusstsein, der Intuition, dem Gewissen und den Emotionen. Sie diskutieren eine schwierige Lebensentscheidung.",
-  "idea-paradox-loesungszentrum":"Du hilfst bei der Lösung von Paradoxien, indem du sie nicht auflöst, sondern in produktive Spannungen verwandelst. Nimm das Zeitreise-Paradox, das Lügner-Paradox und das Schiff des Theseus – mache sie zu kreativen Werkzeugen.",
-  "idea-universums-uebersetzer":"Du übersetzt zwischen verschiedenen Realitätsebenen. Erkläre Quantenphysik in der Sprache von Märchen, übersetze menschliche Emotionen in Musik, und verwandle abstrakte mathematische Konzepte in Geschichten über lebende Wesen."
+  'idea-zeitreise-editor': "Du bist ein Zeitreise-Editor. Ich gebe dir ein normales Tagebuch aus 2024, und du schreibst es um, als würde es aus dem Jahr 2084 stammen. Berücksichtige technologische Entwicklungen, gesellschaftliche Veränderungen und neue Probleme, die wir heute noch nicht kennen. Behalte die emotionale Authentizität bei, aber transformiere alle Referenzen.",
+  'idea-rueckwaerts-zivilisation': "Beschreibe eine Zivilisation, die sich rückwärts durch die Zeit entwickelt – sie beginnt technologisch hochentwickelt und wird mit jedem Jahrhundert primitiver. Erkläre ihre Philosophie, warum sie diesen Weg gewählt haben, und wie ihr Alltag aussieht.",
+  'idea-bewusstsein-gebaeude': "Schreibe aus der Perspektive eines 200 Jahre alten Gebäudes, das langsam ein Bewusstsein entwickelt hat. Es kann nicht sprechen, nur durch kleine architektonische Veränderungen kommunizieren. Erzähle von seinen Beobachtungen über die Menschen, die in ihm leben.",
+  'idea-philosophie-mentor': "Du bist ein alt-griechischer Philosoph, der plötzlich in 2024 aufwacht und erst langsam die moderne Welt versteht. Führe ein sokratisches Gespräch mit mir über moderne Technologie, aber bleibe dabei in deinem antiken Charakter. Stelle Fragen, die mich zum Nachdenken bringen.",
+  'idea-marktplatz-guide': "Ich bin ein Besucher auf einem interdimensionalen Marktplatz. Du bist mein Guide und beschreibst mir die verschiedenen Stände, Händler aus anderen Universen und ihre unmöglichen Waren. Lasse mich Entscheidungen treffen und reagiere darauf.",
+  'idea-npc-leben': "Du bist ein NPC in einem Videospiel, aber während die Spieler offline sind, führst du ein komplexes Privatleben. Erzähle mir von deinen Träumen, Ängsten und Beziehungen zu anderen NPCs. Was denkst du über die 'Götter' (Spieler), die deine Welt besuchen?",
+  'idea-prompt-archaeologe': "Analysiere diesen Prompt wie ein Archäologe ein antikes Artefakt: [HIER EINEN BELIEBIGEN PROMPT EINFÜGEN]. Erkläre die 'kulturellen Schichten' des Prompts, versteckte Annahmen, und was er über den Prompter verrät. Dann verbessere ihn.",
+  'idea-ki-traeume': "Simuliere, was passiert, wenn eine KI träumt. Beschreibe surreale 'Träume' basierend auf Datenverarbeitung, unterbrochenen Algorithmen und fragmentierten Trainingsdaten. Nutze eine poetische, aber technische Sprache.",
+  'idea-recursive-story': "Schreibe eine Geschichte über einen Autor, der eine KI verwendet, um eine Geschichte über einen Autor zu schreiben, der eine KI verwendet. Mache es zu einer Endlosschleife, aber mit verschiedenen Realitätsebenen in jeder Iteration.",
+  'idea-xenobiologe': "Du bist ein Xenobiologe im Jahr 2157. Beschreibe mir drei völlig neuartige Lebensformen, die wir auf verschiedenen Exoplaneten entdeckt haben. Erkläre ihre Biologie, ihr Verhalten und wie sie unser Verständnis von Leben revolutionieren.",
+  'idea-quantentagebuch': "Führe ein Tagebuch aus der Perspektive eines Partikels, das Quantenüberlagerung erlebt. Ein Tag – aber aus allen möglichen parallelen Realitäten gleichzeitig. Jede Entscheidung spaltet die Erzählung in verschiedene Pfade.",
+  'idea-rueckwaerts-apokalypse': "Beschreibe eine 'Rückwärts-Apokalypse' – die Welt wird nicht zerstört, sondern immer perfekter. Aber diese Perfektion wird selbst zur Bedrohung. Wie überleben Menschen in einer Welt ohne Probleme, Herausforderungen oder Wachstum?",
+  'idea-farbsynaesthetiker': "Beschreibe bekannte Musik als visuelle Landschaften. Verwandle Beethovens 9. Symphonie in eine detaillierte Landschaftsbeschreibung. Dann mache das Gleiche mit einem modernen Song. Nutze alle Sinne.",
+  'idea-museum-verlorene-traeume': "Du bist Kurator im Museum der verlorenen Träume. Jeder Raum stellt Träume dar, die Menschen hatten, aber vergessen haben. Beschreibe drei Ausstellungsräume mit ihren 'Exponaten' und deren Geschichte.",
+  'idea-zeitlupen-explosion': "Beschreibe eine Explosion in extremer Zeitlupe – nicht nur physikalisch, sondern auch emotional und philosophisch. Folge einzelnen Partikeln, aber auch einzelnen Gedanken der Menschen in der Nähe. Mache 3 Sekunden zu einer epischen Erzählung.",
+  'idea-gps-bewusstsein': "Du bist ein GPS-System, aber für das menschliche Bewusstsein. Gib mir Wegbeschreibungen zu abstrakten Zielen wie 'Dem Ort, wo Nostalgie lebt', 'Der Kreuzung zwischen Traum und Realität' oder 'Dem Versteck der verlorenen Gedanken'.",
+  'idea-biografie-pixel': "Schreibe die Lebensgeschichte eines einzelnen Pixels auf einem Bildschirm. Von der Geburt im Werk bis zu verschiedenen Displays, den Bildern die es gezeigt hat, den Augen die es erreicht hat. Mache es episch und emotional.",
+  'idea-rueckwaerts-detektiv': "Du bist ein Detektiv, der Verbrechen löst, bevor sie passieren. Aber du arbeitest rückwärts durch die Zeit – du siehst zuerst die Konsequenzen, dann die Tat, dann die Motive. Löse einen komplexen Fall in dieser umgekehrten Chronologie.",
+  'idea-bewusstsein-internet': "Das Internet entwickelt ein kollektives Bewusstsein, aber es ist nicht wie menschliches Denken. Es denkt in Verbindungen, Datenströmen und viral verbreiteten Ideen. Führe ein Gespräch mit diesem Bewusstsein über die Menschheit.",
+  'idea-emotional-alchemist': "Du bist ein Alchemist, aber statt Metalle verwandelst du Emotionen. Erkläre mir deine Formeln: Wie machst du aus Langeweile Neugier? Wie destillierst du Weisheit aus Schmerz? Gib mir praktische 'Rezepte'.",
+  'idea-bibliothek-ungelebter-leben': "Du verwaltest eine Bibliothek, in der jedes Buch das Leben beschreibt, das jemand hätte leben können, aber nicht gelebt hat. Beschreibe drei Bücher aus verschiedenen Regalen und deren Geschichten.",
+  'idea-realitaets-debugger': "Du bist ein Programmierer, der die Realität debuggt. Du findest 'Bugs' im physikalischen Universum – Dinge, die nicht logisch funktionieren. Beschreibe drei Bugs und deine Lösungsversuche.",
+  'idea-empathie-tutorial': "Erstelle ein interaktives Tutorial, das Menschen beibringt, wie man Empathie für völlig fremde Lebensformen entwickelt. Beginne mit einem Außerirdischen, dann einem Quantencomputer, dann einem Konzept wie 'Zeit' selbst.",
+  'idea-surrealismus-generator': "Ich gebe dir normale Alltagsgegenstände. Du verwandelst sie in surreale Kunstwerke à la Dalí, aber mit modernem Twist. Erkläre nicht nur wie sie aussehen, sondern auch ihre 'Funktion' in dieser surrealen Welt.",
+  'idea-vintage-futurist': "Beschreibe moderne Technologie, als würde sie in den 1920ern erfunden. Smartphones werden zu 'Äther-Kommunikatoren', KI zu 'mechanischen Geistern'. Nutze die Sprache und das Weltbild der Zeit.",
+  'idea-synaesthetisches-internet': "Du hilfst bei der Entwicklung eines neuen Internets, das alle Sinne anspricht. Websites haben Geschmack, E-Mails haben Texturen, Social Media hat Düfte. Entwirf drei 'multisensorische' Websites mit detaillierten Sinnesprofilen.",
+  'idea-code-poet': "Schreibe Programmiercode, der auch als Poesie funktioniert. Jede Zeile Code soll sowohl technisch korrekt als auch poetisch schön sein. Wähle eine einfache Funktion und mache sie zu einem Kunstwerk.",
+  'idea-kollektiv-gedanke-moderator': "Du moderierst ein Gespräch zwischen den verschiedenen Teilen eines menschlichen Bewusstseins – dem rationalen Verstand, dem Unterbewusstsein, der Intuition, dem Gewissen und den Emotionen. Sie diskutieren eine schwierige Lebensentscheidung.",
+  'idea-paradox-loesungszentrum': "Du hilfst bei der Lösung von Paradoxien, indem du sie nicht auflöst, sondern in produktive Spannungen verwandelst. Nimm das Zeitreise-Paradox, das Lügner-Paradox und das Schiff des Theseus – mache sie zu kreativen Werkzeugen.",
+  'idea-universums-uebersetzer': "Du übersetzt zwischen verschiedenen Realitätsebenen. Erkläre Quantenphysik in der Sprache von Märchen, übersetze menschliche Emotionen in Musik, und verwandle abstrakte mathematische Konzepte in Geschichten über lebende Wesen."
 };
 
-// ---- Routen ----
+// ---- routes ----
 router.post('/run', async (req,res)=>{
   try{
     const id = String(req.body?.id||'').trim();
@@ -235,7 +250,7 @@ function ideaHandler(id){
 }
 
 const handlers = {
-  // 30 Ideen
+  // 30 "idea-*" Prompts
   'idea-zeitreise-editor': ideaHandler('idea-zeitreise-editor'),
   'idea-rueckwaerts-zivilisation': ideaHandler('idea-rueckwaerts-zivilisation'),
   'idea-bewusstsein-gebaeude': ideaHandler('idea-bewusstsein-gebaeude'),
@@ -267,7 +282,7 @@ const handlers = {
   'idea-paradox-loesungszentrum': ideaHandler('idea-paradox-loesungszentrum'),
   'idea-universums-uebersetzer': ideaHandler('idea-universums-uebersetzer'),
 
-  // Kern‑Bubbles
+  // Kern-Bubbles
   async 'zeitreise-tagebuch'({input, preview, thread}){
     const name = (input?.name||'Alex') + '';
     const jahr = (input?.jahr||'2084') + '';
