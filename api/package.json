@@ -3,9 +3,7 @@
   "version": "5.1.0",
   "private": true,
   "type": "module",
-  "engines": {
-    "node": ">=18.17"
-  },
+  "engines": { "node": ">=18.17" },
   "scripts": {
     "start": "node server/index.js",
     "dev": "NODE_ENV=development node server/index.js"
