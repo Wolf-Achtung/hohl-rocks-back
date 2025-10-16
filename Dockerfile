@@ -1,12 +1,11 @@
 
+# hohl.rocks-back (clean) — Node 20
 FROM node:20-slim
 ENV NODE_ENV=production
 WORKDIR /app
 
-# Only package.json first (layer cache)
+# Install only api deps first (cache-friendly)
 COPY api/package.json ./api/package.json
-
-# Install deps (no npm ci -> no lockfile required)
 RUN cd api && npm install --omit=dev
 
 # Copy sources
