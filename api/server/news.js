@@ -1,48 +1,64 @@
-import { Router } from 'express';
+import express from "express";
+const router = express.Router();
 
-export const router = Router();
-const TAVILY_API_KEY = process.env.TAVILY_API_KEY || '';
+const TAVILY_API_KEY = process.env.TAVILY_API_KEY || "";
+const DACH = [
+  "tagesschau.de","zdf.de","zdfheute.de","heise.de","srf.ch","zeit.de",
+  "spiegel.de","the-decoder.de","welt.de","20min.ch","nzz.ch","derstandard.at","orf.at"
+];
 
-async function tavilySearch(query, domains = [], maxResults = 12){
-  if(!TAVILY_API_KEY) return [];
-  const body = { api_key: TAVILY_API_KEY, query, max_results: maxResults, include_answer: false, search_depth: 'advanced', ...(domains.length?{include_domains:domains}:{}) };
-  const r = await fetch('https://api.tavily.com/search', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
-  if(!r.ok) return [];
-  const j = await r.json(); return (j.results||[]).map(it=>({ title: it.title, url: it.url })).filter(it=>!!it.url);
-}
-function isGermanHost(url=''){ try{ const u=new URL(url); return ['.de','.at','.ch'].some(tld=> u.hostname.endsWith(tld)); }catch{ return false; } }
-
-router.get('/', async (_req,res)=>{
-  try{
-    const items = await tavilySearch('Künstliche Intelligenz News deutsch', [], 20);
-    const sorted = [...items].sort((a,b)=> Number(isGermanHost(b.url)) - Number(isGermanHost(a.url)));
-    res.set('Cache-Control','public, max-age=600'); res.json({ items: sorted.slice(0,12) });
-  }catch(e){ console.error('news failed', e); res.status(500).json({ error:'news_failed' }); }
-});
-
-export async function handleDaily(_req,res){
-  try{
-    // simple rotation / fallback
-    const H = new Date().getUTCHours();
-    const topic = ['KI Sicherheit','KI Alltagstipps','KI Produkte','Agenten','Bildgeneratoren'][H % 5];
-    const items = await tavilySearch(topic + ' deutsch', [], 15);
-    if(items.length>0){ res.set('Cache-Control','public, max-age=600'); return res.json({ items: items.slice(0,8), at: Date.now() }); }
-  }catch{}
-  const fallback = [
-    {title:"Mini‑Workshop: bessere User‑Storys (GWT)", url:"https://martinfowler.com/bliki/GivenWhenThen.html"},
-    {title:"THE DECODER", url:"https://the-decoder.de/"},
-    {title:"ZDF heute – KI", url:"https://www.zdfheute.de/thema/kuenstliche-intelligenz-ki-100.html"}
-  ];
-  res.json({ items: fallback, at: Date.now() });
+function isDach(url="") {
+  try {
+    const u = new URL(url);
+    return u.hostname.endsWith(".de") || u.hostname.endsWith(".ch") || u.hostname.endsWith(".at")
+      || DACH.some(d => u.hostname === d || u.hostname.endsWith("."+d));
+  } catch { return false; }
 }
 
-router.get('/daily', handleDaily);
+async function tavily(query, includeDomains=[], max=18) {
+  if (!TAVILY_API_KEY) return [];
+  const body = {
+    api_key: TAVILY_API_KEY,
+    query,
+    max_results: max,
+    search_depth: "advanced",
+    include_answer: false,
+    ...(includeDomains.length ? { include_domains: includeDomains } : {})
+  };
+  const r = await fetch("https://api.tavily.com/search", {
+    method: "POST",
+    headers: {"content-type":"application/json"},
+    body: JSON.stringify(body)
+  });
+  if (!r.ok) return [];
+  const j = await r.json();
+  return (j.results || []).map(it => ({ title: it.title, url: it.url })).filter(Boolean);
+}
 
-router.get('/top', (_req,res)=>{
-  res.json([
-    { "title": "Der Zeitreise-Tagebuch-Editor", "prompt": "Du bist ein Zeitreise-Editor..." },
-    { "title": "Die Rückwärts-Zivilisation", "prompt": "Beschreibe eine Zivilisation..." }
-  ]);
+router.get("/", async (_req,res) => {
+  try {
+    const results = await tavily("Künstliche Intelligenz Nachrichten deutsch", DACH, 24);
+    const sorted = [...results].sort((a,b)=> Number(isDach(b.url)) - Number(isDach(a.url)));
+    res.set("Cache-Control","public, max-age=600");
+    return res.json({ items: sorted.slice(0,14) });
+  } catch (e) {
+    // Fallback curated list
+    return res.json({ items: [
+      {title:"Künstliche Intelligenz – aktuelle Nachrichten | tagesschau.de", url:"https://www.tagesschau.de/thema/k%C3%BCnstliche_intelligenz"},
+      {title:"ZDFheute – KI", url:"https://www.zdfheute.de/thema/kuenstliche-intelligenz-ki-100.html"},
+      {title:"THE DECODER", url:"https://the-decoder.de/"},
+      {title:"heise – KI", url:"https://www.heise.de/thema/Kuenstliche-Intelligenz"},
+      {title:"SRF Wissen – KI", url:"https://www.srf.ch/wissen/kuenstliche-intelligenz"}
+    ]});
+  }
 });
+
+const DAILY = [
+  {title:"Heute neu: Realitäts‑Debugger als Bubble"},
+  {title:"Tipp: 5‑Why für Root‑Cause in 3 Minuten"},
+  {title:"Micro‑Workshop: bessere User‑Storys (GWT)"}
+];
+
+router.get("/daily", (_req,res)=> res.json({ items: DAILY, at: Date.now() }));
 
 export default router;

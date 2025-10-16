@@ -1,48 +1,100 @@
-export const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
-export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
-export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
-export const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20240620';
-export const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-export const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'mistralai/mistral-7b-instruct:free';
+/* Shared LLM utilities: streams Anthropic or OpenAI, whichever key is present */
+const CLAUDE_MODEL = process.env.CLAUDE_MODEL || "claude-3-5-sonnet-20241022";
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
-function pickLLM(){
-  if(ANTHROPIC_API_KEY) return 'anthropic';
-  if(OPENAI_API_KEY) return 'openai';
-  if(OPENROUTER_API_KEY) return 'openrouter';
+function activeProvider() {
+  if (process.env.ANTHROPIC_API_KEY) return "anthropic";
+  if (process.env.OPENAI_API_KEY) return "openai";
   return null;
 }
-function normalizeForProvider(provider, messages=[], system){
-  const sysMsgs = (messages||[]).filter(m=>m.role==='system').map(m=>m.content);
-  const sys = [system, ...sysMsgs].filter(Boolean).join('\n');
-  const msgsNoSys = (messages||[]).filter(m=>m.role!=='system');
-  if(provider==='anthropic'){
-    const msgs = msgsNoSys.map(m => ({ role: (m.role==='assistant'?'assistant':'user'), content: String(m.content||'') }));
-    return { messages: msgs, system: sys || undefined };
-  }
-  const msgs = sys ? [{role:'system', content: sys}, ...msgsNoSys] : msgsNoSys;
-  return { messages: msgs, system: undefined };
-}
 
-export async function llmText(prompt, temperature=0.7, max_tokens=700, messages=null, system=null){
-  const provider = pickLLM();
-  const baseMsgs = messages || [{role:'user',content:prompt}];
-  const norm = normalizeForProvider(provider, baseMsgs, system);
+export async function* streamLLM({ system = "", user = "" }) {
+  const provider = activeProvider();
+  if (!provider) throw new Error("no_llm_key");
 
-  if(provider==='anthropic'){
-    const body={ model: CLAUDE_MODEL, max_tokens, temperature, messages: norm.messages, ...(norm.system?{system:norm.system}:{}) };
-    const r=await fetch('https://api.anthropic.com/v1/messages',{ method:'POST', headers:{ 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version':'2023-06-01','content-type':'application/json' }, body:JSON.stringify(body) });
-    const j=await r.json();
-    return j?.content?.map?.(c=>c?.text).join('') || '';
+  if (provider === "anthropic") {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: CLAUDE_MODEL,
+        system,
+        max_tokens: 1200,
+        stream: true,
+        messages: [{ role: "user", content: user || "Los geht's." }]
+      })
+    });
+    if (!r.ok || !r.body) throw new Error("anthropic_http_" + r.status);
+
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const chunks = buf.split("\n\n");
+      buf = chunks.pop() || "";
+      for (const c of chunks) {
+        const line = c.split("\n").find((l) => l.startsWith("data:"));
+        if (!line) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        try {
+          const j = JSON.parse(payload);
+          if (j.type === "content_block_delta" && j.delta?.text) {
+            yield j.delta.text;
+          }
+        } catch {}
+      }
+    }
+    return;
   }
-  if(provider==='openai'){
-    const body={ model: OPENAI_MODEL, messages: norm.messages, temperature, max_tokens };
-    const r = await fetch('https://api.openai.com/v1/chat/completions',{ method:'POST', headers:{ 'Authorization':'Bearer '+OPENAI_API_KEY, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
-    const j = await r.json(); return j.choices?.[0]?.message?.content || '';
+
+  if (provider === "openai") {
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "authorization": "Bearer " + process.env.OPENAI_API_KEY,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        stream: true,
+        messages: [
+          ...(system ? [{ role: "system", content: system }] : []),
+          { role: "user", content: user || "Los geht's." }
+        ]
+      })
+    });
+    if (!r.ok || !r.body) throw new Error("openai_http_" + r.status);
+
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split("\n\n");
+      buf = parts.pop() || "";
+      for (const p of parts) {
+        if (!p.startsWith("data:")) continue;
+        const payload = p.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        try {
+          const j = JSON.parse(payload);
+          const delta = j.choices?.[0]?.delta?.content;
+          if (delta) yield delta;
+        } catch {}
+      }
+    }
+    return;
   }
-  if(provider==='openrouter'){
-    const body={ model: OPENROUTER_MODEL, messages: norm.messages, temperature };
-    const r = await fetch('https://openrouter.ai/api/v1/chat/completions',{ method:'POST', headers:{ 'Authorization':'Bearer '+OPENROUTER_API_KEY, 'HTTP-Referer':'https://hohl.rocks','X-Title':'hohl.rocks','Content-Type':'application/json' }, body: JSON.stringify(body) });
-    const j = await r.json(); return j.choices?.[0]?.message?.content || '';
-  }
-  throw new Error('no_llm_key');
+
+  throw new Error("unsupported_provider");
 }
