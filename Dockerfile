@@ -1,10 +1,13 @@
+
 FROM node:20-slim
 ENV NODE_ENV=production
 WORKDIR /app
 
-# Install deps for api
+# Only package.json first (layer cache)
 COPY api/package.json ./api/package.json
-RUN cd api && npm ci --omit=dev || npm i --omit=dev
+
+# Install deps (no npm ci -> no lockfile required)
+RUN cd api && npm install --omit=dev
 
 # Copy sources
 COPY api ./api
