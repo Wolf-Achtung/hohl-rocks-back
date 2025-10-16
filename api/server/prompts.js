@@ -1,4 +1,3 @@
-
 export function systemPrompt(id){
   const BASE = "Du bist ein hilfreicher, präziser Assistent. Antworte deutsch, klar, mit Mini-Gliederung, wenn sinnvoll.";
   const MAP = {

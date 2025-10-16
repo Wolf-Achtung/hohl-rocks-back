@@ -1,5 +1,6 @@
 import { Router } from 'express';
-const router = Router();
+
+export const router = Router();
 const TAVILY_API_KEY = process.env.TAVILY_API_KEY || '';
 
 async function tavilySearch(query, domains = [], maxResults = 12){
@@ -19,14 +20,23 @@ router.get('/', async (_req,res)=>{
   }catch(e){ console.error('news failed', e); res.status(500).json({ error:'news_failed' }); }
 });
 
-router.get('/daily', async (_req,res)=>{
+export async function handleDaily(_req,res){
   try{
-    const hour = new Date().getUTCHours();
-    const topic = ['KI Sicherheit','KI Alltagstipps','KI Produkte','Agenten','Bildgeneratoren'][hour % 5];
+    // simple rotation / fallback
+    const H = new Date().getUTCHours();
+    const topic = ['KI Sicherheit','KI Alltagstipps','KI Produkte','Agenten','Bildgeneratoren'][H % 5];
     const items = await tavilySearch(topic + ' deutsch', [], 15);
-    res.set('Cache-Control','public, max-age=600'); res.json({ items: items.slice(0,8) });
-  }catch(e){ console.error('daily failed', e); res.status(500).json({ error:'daily_failed' }); }
-});
+    if(items.length>0){ res.set('Cache-Control','public, max-age=600'); return res.json({ items: items.slice(0,8), at: Date.now() }); }
+  }catch{}
+  const fallback = [
+    {title:"Mini‑Workshop: bessere User‑Storys (GWT)", url:"https://martinfowler.com/bliki/GivenWhenThen.html"},
+    {title:"THE DECODER", url:"https://the-decoder.de/"},
+    {title:"ZDF heute – KI", url:"https://www.zdfheute.de/thema/kuenstliche-intelligenz-ki-100.html"}
+  ];
+  res.json({ items: fallback, at: Date.now() });
+}
+
+router.get('/daily', handleDaily);
 
 router.get('/top', (_req,res)=>{
   res.json([
