@@ -1,10 +1,8 @@
-
-# hohl.rocks-back (clean) — Node 20
 FROM node:20-slim
 ENV NODE_ENV=production
 WORKDIR /app
 
-# Install only api deps first (cache-friendly)
+# Install only API dependencies first (better cache)
 COPY api/package.json ./api/package.json
 RUN cd api && npm install --omit=dev
 
