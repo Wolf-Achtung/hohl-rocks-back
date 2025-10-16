@@ -1,21 +1,21 @@
+
 {
-  "name": "hohl.rocks-api",
-  "version": "5.1.1",
-  "private": true,
+  "name": "hohl.rocks-back",
+  "version": "1.0.0",
   "type": "module",
-  "engines": {
-    "node": ">=18.17"
-  },
+  "main": "server.js",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
   "scripts": {
-    "start": "node server/index.js",
-    "dev": "NODE_ENV=development node server/index.js"
+    "start": "node server.js",
+    "dev": "NODE_ENV=development nodemon server.js"
   },
   "dependencies": {
-    "compression": "^1.7.4",
+    "anthropic": "^0.27.1",
     "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "express-rate-limit": "^7.3.2",
-    "helmet": "^7.0.0",
-    "morgan": "^1.10.0"
+    "morgan": "^1.10.0",
+    "openai": "^4.53.2"
   }
 }
