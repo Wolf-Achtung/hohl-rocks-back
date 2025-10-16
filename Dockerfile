@@ -1,8 +1,8 @@
-FROM node:20-slim AS base
-ENV NODE_ENV=production
+
+FROM node:20-alpine
 WORKDIR /app
-COPY api/package.json ./api/package.json
-RUN cd api && npm ci --omit=dev || npm i --omit=dev
-COPY api ./api
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev || npm i --omit=dev
+COPY . .
 EXPOSE 8080
-CMD ["node","api/server/index.js"]
+CMD ["npm","start"]
