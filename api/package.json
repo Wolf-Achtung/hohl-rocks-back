@@ -1,6 +1,6 @@
 {
   "name": "hohl.rocks-back",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "type": "module",
   "main": "server/index.js",
   "license": "MIT",
@@ -12,11 +12,9 @@
     "dev": "NODE_ENV=development node server/index.js"
   },
   "dependencies": {
-    "anthropic": "^0.27.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "morgan": "^1.10.0",
-    "openai": "^4.53.2"
+    "morgan": "^1.10.0"
   }
 }
