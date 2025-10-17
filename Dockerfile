@@ -1,8 +1,11 @@
-FROM node:20-slim
+# Railway Node runtime
+FROM node:20-alpine
+
 WORKDIR /app
-COPY api ./api
-WORKDIR /app/api
-RUN npm ci || npm i --only=prod
+COPY api/package.json ./
+RUN npm install --only=production
+COPY api/server ./server
+
 ENV PORT=8080
 EXPOSE 8080
 CMD ["node", "server/index.js"]
