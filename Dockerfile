@@ -1,11 +1,8 @@
 FROM node:20-slim
-
-ENV NODE_ENV=production     PORT=8080
-
 WORKDIR /app
-COPY api/package.json ./
-RUN npm install --omit=dev && npm cache clean --force
-COPY api ./
-
+COPY api ./api
+WORKDIR /app/api
+RUN npm ci || npm i --only=prod
+ENV PORT=8080
 EXPOSE 8080
-CMD ["node","server/index.js"]
+CMD ["node", "server/index.js"]
