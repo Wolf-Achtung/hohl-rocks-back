@@ -1,18 +1,11 @@
-FROM node:20-alpine
+FROM node:20-slim
+
+ENV NODE_ENV=production     PORT=8080
 
 WORKDIR /app
-
-# Install only production deps from api/package.json
-COPY api/package.json ./api/package.json
-RUN cd /app/api && npm ci --omit=dev || npm i --omit=dev
-
-# Copy source
-COPY api /app/api
-
-ENV NODE_ENV=production
-ENV PORT=8080
+COPY api/package.json ./
+RUN npm install --omit=dev && npm cache clean --force
+COPY api ./
 
 EXPOSE 8080
-
-# Single, unambiguous entrypoint
-CMD ["node","api/server/index.js"]
+CMD ["node","server/index.js"]
