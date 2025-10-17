@@ -1,18 +1,17 @@
 {
   "name": "hohlrocks-backend",
-  "version": "2.0.0",
+  "version": "1.8.0",
   "private": true,
-  "type": "module",
-  "main": "server/index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18.18"
+  },
   "scripts": {
-    "start": "node server/index.js",
-    "dev": "NODE_ENV=development node server/index.js"
+    "start": "node server/index.js"
   },
   "dependencies": {
-    "compression": "^1.7.4",
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "helmet": "^7.1.0",
     "morgan": "^1.10.0",
     "node-fetch": "^3.3.2"
   }
