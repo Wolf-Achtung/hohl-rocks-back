@@ -3,13 +3,16 @@
   "version": "1.8.0",
   "type": "module",
   "main": "server/index.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server/index.js"
   },
   "dependencies": {
-    "cors": "^2.8.5",
     "compression": "^1.7.4",
-    "helmet": "^7.0.0",
-    "express": "^4.19.2"
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "helmet": "^7.0.0"
   }
 }
