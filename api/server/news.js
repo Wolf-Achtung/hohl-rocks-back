@@ -1,70 +1,75 @@
-/* server/news.js — Patch 1.8.1
- * Tavily-backed news (DE/AT/CH focus) with 12h in-memory cache.
- * Uses global fetch (Node >=18), no node-fetch needed.
- */
+import fetch from 'node-fetch';
 
-import express from "express";
+const TAVILY_API_KEY = process.env.TAVILY_API_KEY || '';
 
-export const newsRouter = express.Router();
+// Simple memory cache
+const cache = new Map();
+const TTL = 12 * 60 * 60 * 1000; // 12h
 
-let cacheNews = { ts: 0, items: [] };
-let cacheDaily = { ts: 0, items: [] };
-
-const DACH_DOMAINS = [
-  "www.heise.de","www.tagesschau.de","www.zeit.de","www.srf.ch","www.zdf.de","www.handelsblatt.com",
-  "www.derstandard.at","www.orf.at","www.spiegel.de","www.welt.de","www.nzz.ch","www.20min.ch","the-decoder.de"
+const FALLBACK_SOURCES = [
+  { title: "Tagesschau – Künstliche Intelligenz", url: "https://www.tagesschau.de/thema/kuenstliche_intelligenz" },
+  { title: "heise online – KI", url: "https://www.heise.de/thema/Kuenstliche-Intelligenz" },
+  { title: "ZEIT – Künstliche Intelligenz", url: "https://www.zeit.de/thema/kuenstliche-intelligenz" },
+  { title: "SRF Wissen – KI", url: "https://www.srf.ch/wissen/kuenstliche-intelligenz" },
+  { title: "The Decoder – KI News", url: "https://the-decoder.de/" }
 ];
 
-newsRouter.get("/", async (_req, res) => {
+function setCache(key, data) {
+  cache.set(key, { t: Date.now(), data });
+}
+function getCache(key) {
+  const v = cache.get(key);
+  if (!v) return null;
+  if (Date.now() - v.t > TTL) { cache.delete(key); return null; }
+  return v.data;
+}
+
+function domainsForRegion(region) {
+  // prefer DE/AT/CH
+  const base = ["tagesschau.de", "heise.de", "zeit.de", "srf.ch", "the-decoder.de", "spiegel.de", "faz.net", "sueddeutsche.de", "nzz.ch", "t3n.de"];
+  return base;
+}
+
+export async function getNews({ region = 'de' } = {}) {
+  const key = `news:${region}`;
+  const hit = getCache(key);
+  if (hit) return hit;
+
   try {
-    const items = await getNews();
-    res.json({ ok: true, items, updated: cacheNews.ts });
-  } catch (_e) {
-    res.status(500).json({ ok: false, error: "news_failed" });
+    if (!TAVILY_API_KEY) throw new Error('missing tavily key');
+    const q = "Aktuelle Nachrichten Künstliche Intelligenz Deutschland Österreich Schweiz seriöse Quellen";
+    const body = {
+      api_key: TAVILY_API_KEY,
+      query: q,
+      search_depth: "advanced",
+      include_answer: false,
+      include_images: false,
+      include_domains: domainsForRegion(region),
+      max_results: 10
+    };
+    const resp = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!resp.ok) throw new Error(`tavily_http_${resp.status}`);
+    const j = await resp.json();
+    const items = (j.results || [])
+      .map(r => ({ title: r.title, url: r.url }))
+      .filter(x => x.title && x.url);
+    const out = items.length ? items : FALLBACK_SOURCES;
+    setCache(key, out);
+    return out;
+  } catch (e) {
+    // fallback
+    setCache(key, FALLBACK_SOURCES);
+    return FALLBACK_SOURCES;
   }
-});
-
-export async function getDaily() {
-  const age = Date.now() - (cacheDaily.ts || 0);
-  if (age < 1000 * 60 * 60 * 12 && cacheDaily.items?.length) return cacheDaily.items;
-
-  const query = "KI Tipps Sicherheit praktische neue Funktionen ChatGPT Claude deutsch";
-  const results = await tavilySearch(query, 18);
-  const items = (results || []).map((r) => ({ title: r.title, url: r.url })).slice(0, 8);
-  cacheDaily = { ts: Date.now(), items };
-  return items;
 }
 
-async function getNews() {
-  const age = Date.now() - (cacheNews.ts || 0);
-  if (age < 1000 * 60 * 60 * 12 && cacheNews.items?.length) return cacheNews.items;
-
-  const query = "Künstliche Intelligenz News Sicherheit Funktionen ChatGPT Claude deutsch";
-  const results = await tavilySearch(query, 24);
-  const filtered = (results || []).filter((r) => DACH_DOMAINS.some((d) => r.url.includes(d)));
-  const items = filtered.map((r) => ({ title: r.title, url: r.url })).slice(0, 14);
-  cacheNews = { ts: Date.now(), items };
-  return items;
-}
-
-async function tavilySearch(query, max = 20) {
-  const key = process.env.TAVILY_API_KEY || "";
-  if (!key) return [];
-  const body = {
-    api_key: key,
-    query,
-    search_depth: "basic",
-    include_answer: false,
-    max_results: max,
-    days: 10,
-    include_domains: DACH_DOMAINS,
-  };
-  const res = await fetch("https://api.tavily.com/search", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) return [];
-  const data = await res.json().catch(() => ({ results: [] }));
-  return data.results || [];
+export async function getDaily({ region = 'de' } = {}) {
+  // rotate a subset of news
+  const items = await getNews({ region });
+  // pick first 6
+  return items.slice(0, 6);
 }

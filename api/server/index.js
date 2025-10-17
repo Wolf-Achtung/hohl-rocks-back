@@ -1,101 +1,152 @@
-/* server/index.js — Patch 1.8.1
- * Express backend for hohl.rocks
- * Fixes:
- *  - Correct string newlines (no unescaped line breaks)
- *  - Stable CORS and security middleware
- *  - Resilient /api/run streaming
- */
-
-import express from "express";
-import cors from "cors";
-import helmet from "helmet";
-import compression from "compression";
-
-import { newsRouter, getDaily } from "./news.js";
-import { promptsMap } from "./prompts.js";
-import { runLLM } from "./share.llm.js";
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import compression from 'compression';
+import morgan from 'morgan';
+import fetch from 'node-fetch';
+import { getNews, getDaily } from './news.js';
+import { runLLM } from './share.llm.js';
+import { prompts } from './prompts.js';
 
 const app = express();
-app.set("trust proxy", 1);
+const PORT = process.env.PORT || 8080;
+const NODE_ENV = process.env.NODE_ENV || 'development';
 
-// Security & performance
-app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '*')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true }));
 app.use(compression());
-app.use(express.json({ limit: "1mb" }));
+
+// Helmet with a permissive CSP for inline styles used in bubbles; netlify/_headers should still set CSP for static site
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+}));
 
 // CORS
-const allow = process.env.ALLOWED_ORIGINS || "*";
-const allowList = allow === "*" ? [] : allow.split(",").map(s => s.trim()).filter(Boolean);
-app.use(
-  cors({
-    origin(origin, cb) {
-      if (!origin) return cb(null, true);
-      if (allow === "*") return cb(null, true);
-      const ok = allowList.some((a) => {
-        if (a.includes("*")) {
-          const re = new RegExp(a.replace(/\./g, "\\.").replace("\*", ".*") + "$");
-          return re.test(origin);
-        }
-        return origin === a || origin.endsWith(a);
-      });
-      cb(ok ? null : new Error("CORS blocked"), ok);
-    },
-  })
-);
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin || allowedOrigins.includes('*') || allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(new Error('CORS blocked'), false);
+  },
+  credentials: false
+}));
 
-// Health
-app.get("/healthz", (_req, res) => {
-  res.json({ ok: true, time: new Date().toISOString(), env: process.env.NODE_ENV || "production" });
-});
-app.get("/readyz", (_req, res) => {
-  const hasKey = !!(process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY);
-  if (!hasKey) return res.status(503).json({ ok: false, error: "no_llm_key" });
-  res.json({ ok: true });
+if (NODE_ENV !== 'test') {
+  app.use(morgan('tiny'));
+}
+
+// Health & Ready
+app.get('/healthz', (req, res) => {
+  res.json({
+    ok: true,
+    time: new Date().toISOString(),
+    env: NODE_ENV,
+    version: '2025.10',
+    features: {
+      eu_host_check: true,
+      idempotency: true,
+      quality: true,
+      queue_enabled: false,
+      pdf_service: true
+    }
+  });
 });
 
-// News + Daily
-app.use("/api/news", newsRouter);
-app.get("/api/daily", async (_req, res) => {
+app.get('/readyz', (req, res) => {
+  const envs = [
+    'ANTHROPIC_API_KEY',
+    'OPENAI_API_KEY',
+    'OPENROUTER_API_KEY',
+    'TAVILY_API_KEY'
+  ];
+  const missing = envs.filter(k => !process.env[k]);
+  res.json({ ok: missing.length === 0, missing });
+});
+
+// API namespace
+const api = express.Router();
+
+api.get('/version', (req, res) => res.json({ ok: true, version: '2.0.0' }));
+
+// Prompts (static curated list used by bubbles and prompts modal)
+api.get('/prompts', (req, res) => {
+  res.json({ ok: true, items: prompts });
+});
+
+// News & Daily (12h cache handled in module)
+api.get('/news', async (req, res) => {
   try {
-    const items = await getDaily();
-    res.json({ ok: true, items });
+    const region = (req.query.region || 'de').toLowerCase();
+    const data = await getNews({ region });
+    res.json({ ok: true, items: data });
   } catch (e) {
-    res.status(500).json({ ok: false, error: "daily_failed" });
+    res.status(502).json({ ok: false, error: 'news_unavailable', detail: String(e) });
   }
 });
 
-// LLM Run (text streaming response)
-app.post("/api/run", async (req, res) => {
+api.get('/daily', async (req, res) => {
   try {
-    const { id, input = "" } = req.body || {};
-    const cfg = promptsMap[id] || null;
-    if (!cfg) {
-      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-      res.write("Unbekannte Aktion. Bitte eine Bubble aus der Startseite wählen.");
+    const region = (req.query.region || 'de').toLowerCase();
+    const data = await getDaily({ region });
+    res.json({ ok: true, items: data });
+  } catch (e) {
+    res.status(502).json({ ok: false, error: 'daily_unavailable', detail: String(e) });
+  }
+});
+
+// LLM streaming run
+api.post('/run', async (req, res) => {
+  // SSE headers
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+
+  const send = (event, data) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${typeof data === 'string' ? data : JSON.stringify(data)}\n\n`);
+  };
+
+  try {
+    const body = req.body || {};
+    const { prompt, system, temperature, model, provider } = body;
+    if (!prompt || typeof prompt !== 'string') {
+      send('error', { message: 'missing_prompt' });
       return res.end();
     }
-
-    const sys = cfg.system || "";
-    const user = (cfg.userTemplate || "Aufgabe:\n") + (input || cfg.example || "");
-
-    const out = await runLLM({ system: sys, user, maxTokens: cfg.maxTokens || 750 });
-    const text = out?.text || "(keine Antwort)";
-
-    res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-    for (let i = 0; i < text.length; i += 900) {
-      res.write(text.slice(i, i + 900));
-      // small delay to simulate chunked streaming
-      // eslint-disable-next-line no-await-in-loop
-      await new Promise((r) => setTimeout(r, 20));
-    }
+    await runLLM({
+      prompt,
+      system,
+      temperature: typeof temperature === 'number' ? temperature : 0.2,
+      model,
+      provider,
+      onToken: (t) => send('chunk', t),
+      onDone: (meta) => {
+        send('done', meta || { ok: true });
+        res.end();
+      },
+      onError: (err) => {
+        send('error', { message: String(err) });
+        res.end();
+      }
+    });
+  } catch (e) {
+    send('error', { message: String(e) });
     res.end();
-  } catch (_e) {
-    res.status(200).type("text/plain").end("Fehler bei der Verarbeitung. Bitte später erneut versuchen.");
   }
 });
 
-// Root
-app.get("/", (_req, res) => res.send("ok"));
+app.use('/api', api);
 
-const port = process.env.PORT || 8080;
-app.listen(port, () => console.log("API running on :" + port));
+// 404
+app.use((req, res) => res.status(404).json({ ok: false, error: 'not_found' }));
+
+app.listen(PORT, () => {
+  console.log(`[hohl.rocks-back] listening on :${PORT}`);
+});
