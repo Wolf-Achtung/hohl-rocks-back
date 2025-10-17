@@ -1,75 +1,83 @@
-import express from 'express';
-import cors from 'cors';
-import pino from 'pino';
-import { generate } from './share.llm.js';
-import { getDachNews, getDaily } from './news.js';
+import express from "express";
+import cors from "cors";
+import helmet from "helmet";
+import compression from "compression";
 
-const log = pino({ level: process.env.LOG_LEVEL || 'info' });
+import { newsRouter, getDaily } from "./news.js";
+import { promptsMap } from "./prompts.js";
+import { runLLM } from "./share.llm.js";
+
 const app = express();
-const PORT = process.env.PORT || 8080;
-
-// CORS
-const allowed = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
-app.use(cors({
-  origin: function (origin, cb) {
-    if (!origin) return cb(null, true);
-    if (allowed.length === 0) return cb(null, true);
-    const ok = allowed.some(a => origin.endsWith(a) || origin === a || (a.includes('*') && new RegExp(a.replace('*','.*')).test(origin)));
-    cb(ok ? null : new Error('CORS'), ok);
-  }
+app.set("trust proxy", 1);
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
 }));
+app.use(compression());
+app.use(express.json({limit:"1mb"}));
 
-app.use(express.json({ limit:'1mb' }));
+// ----- CORS -----
+const allow = process.env.ALLOWED_ORIGINS || "*";
+const corsOptions = (req, cb)=>{
+  if(allow === "*" ) return cb(null, { origin: true, credentials:true });
+  const list = allow.split(",").map(s=>s.trim()).filter(Boolean);
+  const origin = req.headers.origin || "";
+  cb(null, { origin: list.includes(origin), credentials:true });
+};
+app.use(cors(corsOptions));
 
-// health
-app.get('/healthz', (req,res)=> res.json({ ok:true, now:Date.now(), env: process.env.NODE_ENV || 'production' }));
-app.get('/readyz', (req,res)=>{
-  const ok = !!(process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY);
-  res.status(ok?200:503).json({ ok, provider: ok ? 'configured' : 'none' });
+// ----- Health/Ready -----
+app.get("/healthz", (req,res)=>{
+  res.json({ok:true, time:new Date().toISOString(), env:process.env.NODE_ENV||"production"});
+});
+app.get("/readyz", (req,res)=>{
+  const hasKey = !!(process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY);
+  if(!hasKey) return res.status(503).json({ok:false, error:"keys_missing"});
+  res.json({ok:true});
 });
 
-// news
-function sendNews(res){
-  res.json({ items: getDachNews(), updated: Date.now() });
-}
-app.get('/api/news', (req,res)=> sendNews(res));
-app.get('/_api/news', (req,res)=> sendNews(res));
-
-// daily ticker
-function sendDaily(res){
-  res.json({ items: getDaily(), updated: Date.now() });
-}
-app.get('/api/daily', (req,res)=> sendDaily(res));
-app.get('/_api/daily', (req,res)=> sendDaily(res));
-
-// run (SSE-like chunking)
-async function handleRun(req, res){
-  const { title = 'Assistent', prompt = '' } = req.body || {};
-  res.writeHead(200, {
-    'Content-Type': 'text/plain; charset=utf-8',
-    'X-Accel-Buffering': 'no',
-    'Cache-Control': 'no-cache, no-transform',
-    'Transfer-Encoding': 'chunked'
-  });
+// ----- News & Daily -----
+app.use("/api/news", newsRouter);
+app.get("/api/daily", async (req,res)=>{
   try{
-    const generated = await generate({ title, prompt });
-    // chunk it
-    const parts = generated.split(/(\n\n)/);
-    for(const p of parts){
-      res.write(p);
-      await new Promise(r=>setTimeout(r, 80));
-    }
-  }catch(err){
-    log.error({ err }, 'run failed');
-    res.write('Fehler: Service nicht erreichbar.');
-  }finally{
-    res.end();
+    const d = await getDaily();
+    res.json({ok:true, items:d});
+  }catch(e){
+    res.status(500).json({ok:false, error:"daily_failed"});
   }
+});
+
+// ----- Run (LLM) -----
+app.post("/api/run", async (req,res)=>{
+  try{
+    const { id, input="" } = req.body || {};
+    const cfg = promptsMap[id];
+    if(!cfg){
+      res.writeHead(200, {"Content-Type":"text/plain; charset=utf-8"});
+      res.write("Unbekannte Aktion. Bitte eine Bubble aus der Startseite wählen.");
+      return res.end();
+    }
+
+    const sys = cfg.system || "";
+    const user = (cfg.userTemplate || "Aufgabe:
+") + (input || cfg.example || "");
+    const modelRes = await runLLM({system:sys, user, maxTokens: cfg.maxTokens || 750});
+    // Simpler Chunk-Streamer
+    res.writeHead(200, {"Content-Type":"text/plain; charset=utf-8"});
+    const text = modelRes?.text || "Kein Inhalt erhalten.";
+    for(const chunk of chunkify(text, 900)){
+      res.write(chunk);
+      await wait(22);
+    }
+    res.end();
+  }catch(e){
+    res.status(200).type("text/plain").end("Fehler bei der Verarbeitung. Bitte später erneut versuchen.");
+  }
+});
+
+function chunkify(s, n){
+  const out=[]; for(let i=0;i<s.length;i+=n) out.push(s.slice(i,i+n)); return out;
 }
-app.post('/api/run', handleRun);
-app.post('/_api/run', handleRun);
+const wait = (ms)=> new Promise(r=>setTimeout(r,ms));
 
-// root
-app.get('/', (req,res)=> res.send('ok'));
-
-app.listen(PORT, ()=> log.info(`hohl.rocks back listening on ${PORT}`));
+const port = process.env.PORT || 8080;
+app.listen(port, ()=> console.log("API up on :"+port));
