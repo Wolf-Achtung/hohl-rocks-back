@@ -1,15 +1,15 @@
-# Build a tiny Node image
 FROM node:20-alpine
 
 WORKDIR /app
 
-# Copy API sources
+# Install deps without requiring a lockfile
 COPY api/package.json ./api/package.json
-RUN cd api && npm ci --omit=dev
+RUN cd /app/api && npm install --omit=dev
 
-COPY api/server ./api/server
+# Copy sources
+COPY api /app/api
 
-ENV PORT=8080
+ENV PORT=8080 NODE_ENV=production
 EXPOSE 8080
 
-CMD ["node", "api/server/index.js"]
+CMD ["node","/app/api/server/index.js"]
