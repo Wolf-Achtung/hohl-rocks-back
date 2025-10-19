@@ -28,10 +28,15 @@ app.get('/readyz', (_req, res) => {
   res.json({ ok: issues.length === 0, issues });
 });
 
-/* Tavily helpers */
-const DEFAULT_DOMAINS = (process.env.NEWS_DOMAINS || 'heise.de,golem.de,t3n.de,the-decoder.de,tagesschau.de,zeit.de').split(',').map(s=>s.trim()).filter(Boolean);
-const CACHE_MS = 3 * 60 * 60 * 1000;
-let newsCache = { ts: 0, key: '', items: [] };
+/* ---------------- Tavily helpers (DACH Tipps/How-To Bias) ---------------- */
+const DEFAULT_DOMAINS = (process.env.NEWS_DOMAINS || 'the-decoder.de,heise.de,golem.de,t3n.de,computerbase.de,chip.de,netzpolitik.org').split(',').map(s=>s.trim()).filter(Boolean);
+const TTL_HOURS = Math.max(1, parseInt(process.env.NEWS_TTL_HOURS || '24', 10));
+const CACHE_MS = TTL_HOURS * 60 * 60 * 1000;
+
+const state = {
+  cache: { ts: 0, key: '', items: [] },
+  refreshing: false
+};
 
 function withTimeout(ms){
   const controller = new AbortController();
@@ -43,6 +48,22 @@ function filterAllowed(items, domains){
   const set = new Set(domains.map(h=>h.replace(/^www\./,'')));
   return items.filter(it => set.has(hostOf(it.url)));
 }
+function scoreItem(it){
+  const h = hostOf(it.url);
+  const weights = new Map([
+    ['the-decoder.de', 9], ['heise.de', 8], ['golem.de', 8], ['t3n.de', 7],
+    ['computerbase.de', 7], ['chip.de', 6], ['netzpolitik.org', 6],
+    ['zeit.de', 5], ['handelsblatt.com', 5], ['wiwo.de', 5], ['spiegel.de', 5], ['faz.net', 5], ['nzz.ch', 5],
+    ['computerwoche.de', 6], ['datenschutz-notizen.de', 6]
+  ]);
+  const title = (it.title||'').toLowerCase();
+  const bonus = [
+    /tipps|tricks|how[- ]?to|anleitung|praxis|so geht|leitfaden|guide/,
+    /chatgpt|claude|mistral|llama|prompt/
+  ].reduce((acc, re) => acc + (re.test(title) ? 2 : 0), 0);
+  return (weights.get(h) || 1) + bonus;
+}
+
 async function tavily(query, domains, maxResults=8, ms=8000){
   const key = process.env.TAVILY_API_KEY; if (!key) return [];
   const { signal, cancel } = withTimeout(ms);
@@ -50,7 +71,7 @@ async function tavily(query, domains, maxResults=8, ms=8000){
     const r = await fetch('https://api.tavily.com/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key:key, query, search_depth:'advanced', include_domains:domains, max_results:Math.min(Math.max(maxResults,1),20), topic:'news', time_range:'d', include_answer:false }),
+      body: JSON.stringify({ api_key:key, query, search_depth:'advanced', include_domains:domains, max_results:Math.min(Math.max(maxResults,1),20), topic:'news', time_range:'w', include_answer:false }),
       signal
     });
     cancel();
@@ -64,46 +85,73 @@ async function tavily(query, domains, maxResults=8, ms=8000){
 function dedupe(items){
   const seen = new Set(); const out = [];
   for (const it of items){
-    const k = hostOf(it.url)+'|'+(it.title||'').slice(0,80);
+    const k = hostOf(it.url)+'|'+(it.title||'').slice(0,100);
     if (!seen.has(k)){ seen.add(k); out.push(it); }
   }
   return out;
 }
 
-/* API */
+async function refreshNews(doms){
+  if (state.refreshing) return;
+  state.refreshing = true;
+  try{
+    const queries = [
+      'deutsch Tipps Tricks ChatGPT Prompts Praxis produktiver arbeiten Beispiele',
+      'deutsch Anleitung How-to Claude Prompting Sicherheit Datenschutz',
+      'deutsch Mistral LLM Einsatz im Alltag Best Practices',
+      'deutsch Llama Open-Source KI lokal Tipps Datenschutz',
+      'deutsch Praxis KI im Büro Automatisierung E-Mail Texte Tabellen'
+    ];
+    let merged = [];
+    for (const q of queries){ const chunk = await tavily(q, doms, 8); merged = merged.concat(chunk); }
+    let items = dedupe(merged);
+    items.sort((a,b)=> scoreItem(b) - scoreItem(a));
+    items = items.filter(it => /ki|künstliche intelligenz|chatgpt|claude|mistral|llama|prompt/i.test(it.title||''));
+    items = items.slice(0, 18);
+    state.cache = { ts: Date.now(), key: doms.join(','), items };
+  } catch(e){ console.error('[news.refresh]', e); }
+  finally { state.refreshing = false; }
+}
+
 const api = express.Router();
 
 api.get('/news', async (req, res) => {
   try{
     const doms = (req.query.domains ? String(req.query.domains).split(',') : DEFAULT_DOMAINS).map(s=>s.trim()).filter(Boolean);
-    const cacheKey = doms.join(',') + '|DEKI';
+    const prefetch = String(req.query.prefetch||'0') === '1';
     const now = Date.now();
-    if (newsCache.items.length && now - newsCache.ts < CACHE_MS && newsCache.key === cacheKey){
-      return res.json({ ok:true, items: newsCache.items, cached:true });
+    const fresh = state.cache.items.length && (now - state.cache.ts) < CACHE_MS && state.cache.key === doms.join(',');
+
+    if (!fresh && !state.refreshing){
+      // Stale-While-Revalidate: starte Aktualisierung nebenläufig
+      refreshNews(doms);
     }
-    const queries = [
-      'KI Sicherheit Deutschland aktuelle Warnungen Data Leakage Prompt Injection',
-      'ChatGPT Tipps Tricks deutsch Produktivität Beispiele',
-      'Claude Tipps Tricks deutsch Prompting Sicherheit',
-      'Mistral KI Tipps deutsch Best Practices',
-      'Llama KI Tipps deutsch Datenschutz Open-Source'
-    ];
-    let merged = [];
-    for (const q of queries){ const chunk = await tavily(q, doms, 6); merged = merged.concat(chunk); }
-    const items = dedupe(merged).slice(0, 16);
-    newsCache = { ts: now, key: cacheKey, items };
-    res.json({ ok:true, items });
+
+    if (prefetch){
+      // Prefetch-Antwort immer schnell; UI muss nicht warten
+      return res.json({ ok: true, cached: !!state.cache.items.length, stale: !fresh, items: state.cache.items || [] });
+    }
+
+    // Normale Anforderung: Wenn wir Daten haben, liefere sofort; sonst kurze Wartezeit bis 6s
+    if (state.cache.items.length){
+      return res.json({ ok:true, items: state.cache.items, cached: fresh });
+    }
+
+    // Kalter Start: einmalig kurz warten
+    const start = Date.now();
+    while (!state.cache.items.length && (Date.now() - start) < 6000){
+      await new Promise(r => setTimeout(r, 120));
+    }
+    return res.json({ ok:true, items: state.cache.items || [], cached: false });
   } catch(e){ console.error('[news]', e); res.json({ ok:true, items:[] }); }
 });
 
 api.get('/daily', async (_req, res) => {
   try {
-    if (!newsCache.items?.length) {
-      const doms = DEFAULT_DOMAINS;
-      newsCache.items = await tavily('KI Deutschland Tipps Tricks Sicherheit', doms, 6);
-      newsCache.ts = Date.now(); newsCache.key = 'daily';
+    if (!state.cache.items?.length) {
+      await refreshNews(DEFAULT_DOMAINS);
     }
-    const picks = newsCache.items.slice(0, 6).map((it, i) => ({ title: i === 0 ? 'Spotlight' : `Lesenswert ${i}`, url: it.url }));
+    const picks = state.cache.items.slice(0, 6).map((it, i) => ({ title: i === 0 ? 'Spotlight' : `Lesenswert ${i}`, url: it.url }));
     res.json({ ok: true, items: picks });
   } catch(e){ console.error('[daily]', e); res.json({ ok:true, items:[] }); }
 });
