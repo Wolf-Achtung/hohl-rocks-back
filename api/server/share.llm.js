@@ -1,11 +1,10 @@
 /**
- * Simple LLM abstraction. Chooses a provider based on available env vars.
- * Returns plain text. If no provider is configured, returns a deterministic fallback.
+ * Provider-agnostic text completion.
+ * Returns full text (non-stream). SSE endpoint will chunk it.
  */
 export async function completeText(prompt, { system, provider } = {}){
   const headers = (obj)=> ({ 'Content-Type': 'application/json', ...obj });
 
-  // Prefer explicit provider
   const has = {
     openai: !!process.env.OPENAI_API_KEY,
     anthropic: !!process.env.ANTHROPIC_API_KEY,
@@ -41,7 +40,7 @@ export async function completeText(prompt, { system, provider } = {}){
         body: JSON.stringify({
           model: process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20241022',
           system,
-          max_tokens: 500,
+          max_tokens: 900,
           messages: [{ role: 'user', content: prompt }]
         })
       });
@@ -53,9 +52,7 @@ export async function completeText(prompt, { system, provider } = {}){
     if (pick === 'openrouter' && has.openrouter){
       const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
-        headers: headers({
-          'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`
-        }),
+        headers: headers({ 'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}` }),
         body: JSON.stringify({
           model: process.env.OPENROUTER_MODEL || 'anthropic/claude-3.5-haiku:beta',
           messages: [
@@ -72,7 +69,5 @@ export async function completeText(prompt, { system, provider } = {}){
     console.error('[llm] error', err);
     return 'Fehler bei der Modell-Abfrage.';
   }
-
-  // Fallback: deterministic text (makes UI usable without keys)
-  return `Demo-Antwort: (kein KI-Provider konfiguriert)\n\n${prompt.slice(0, 300)}`;
+  return `Demo-Antwort (kein Provider):\n\n${prompt.slice(0, 500)}`;
 }

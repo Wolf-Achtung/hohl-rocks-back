@@ -1,14 +1,15 @@
 /**
- * hohl.rocks backend — v2.0 (Express)
+ * hohl.rocks backend — v2.2
  * - Health: /healthz, /readyz
- * - API: /api/news, /api/daily, /api/run, /api/news/top
- * - Alias: the same router is mounted at /_api for backwards compatibility
+ * - API: /api/news, /api/daily, /api/run (JSON), /api/run/stream (SSE)
+ * - Alias: router at /api and /_api
  */
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import compression from 'compression';
+import { setTimeout as sleep } from 'timers/promises';
 
 import { TOP_PROMPTS } from './prompts.js';
 import { completeText } from './share.llm.js';
@@ -22,8 +23,8 @@ app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors({
   origin: (origin, cb) => {
     const allow = (process.env.CORS_ALLOWLIST || '').split(',').map(s => s.trim()).filter(Boolean);
-    if (!origin) return cb(null, true); // same-origin / curl
-    if (allow.length === 0) return cb(null, true); // permissive by default (Netlify handles)
+    if (!origin) return cb(null, true);
+    if (allow.length === 0) return cb(null, true);
     cb(null, allow.includes(origin));
   }
 }));
@@ -37,7 +38,6 @@ app.get('/healthz', (_req, res) => res.json({ ok: true }));
 app.get('/readyz', (_req, res) => {
   const issues = [];
   if (!process.env.TAVILY_API_KEY) issues.push('TAVILY_API_KEY missing');
-  // Providers are optional
   res.json({ ok: issues.length === 0, issues });
 });
 
@@ -45,11 +45,10 @@ app.get('/readyz', (_req, res) => {
 const DEFAULT_DOMAINS = (process.env.NEWS_DOMAINS || 'heise.de,zeit.de,srf.ch,tagesschau.de,the-decoder.de,zdf.de,20min.ch')
   .split(',').map(s => s.trim()).filter(Boolean);
 
-// 12h in-memory cache
-const CACHE_MS = 12 * 60 * 60 * 1000;
+const CACHE_MS = 3 * 60 * 60 * 1000; // 3h
 let newsCache = { ts: 0, key: '', items: [] };
 
-async function tavilySearch(query, domains = DEFAULT_DOMAINS, maxResults = 12){
+async function tavilySearch(query, domains = DEFAULT_DOMAINS, maxResults = 10){
   const key = process.env.TAVILY_API_KEY;
   if (!key) return [];
   const body = {
@@ -69,11 +68,21 @@ async function tavilySearch(query, domains = DEFAULT_DOMAINS, maxResults = 12){
   });
   if (!r.ok) throw new Error(`tavily_${r.status}`);
   const j = await r.json();
-  const items = (j?.results || j?.results_v2 || j?.results || []).map(x => ({
+  const items = (j?.results || []).map(x => ({
     title: x.title || x.content || x.snippet || 'Ohne Titel',
     url: x.url
   })).filter(it => it.url);
   return items;
+}
+
+function dedupe(items){
+  const seen = new Set();
+  const out = [];
+  for (const it of items){
+    const key = new URL(it.url).hostname.replace(/^www\./,'') + '|' + (it.title||'').slice(0,80);
+    if (!seen.has(key)){ seen.add(key); out.push(it); }
+  }
+  return out;
 }
 
 /* -------------------- API Router -------------------- */
@@ -81,27 +90,37 @@ const api = express.Router();
 
 api.get('/news', async (req, res) => {
   try {
-    const q = (req.query.q || 'Aktuelle Nachrichten zu Künstlicher Intelligenz (Deutschland)').toString();
-    const doms = (req.query.domains ? String(req.query.domains).split(',') : DEFAULT_DOMAINS);
     const now = Date.now();
-    const cacheKey = q + '|' + doms.join(',');
+    const doms = (req.query.domains ? String(req.query.domains).split(',') : DEFAULT_DOMAINS);
+    const cacheKey = doms.join(',') + '|DEKI';
     if (newsCache.items.length && now - newsCache.ts < CACHE_MS && newsCache.key === cacheKey){
       return res.json({ ok: true, items: newsCache.items, cached: true });
     }
-    const items = await tavilySearch(q, doms, 12);
+    // German KI-relevant queries: Sicherheit + Praxis + Tool-Tipps
+    const queries = [
+      'KI Sicherheit Deutschland aktuelle Warnungen KI-Sicherheit Data Leakage Prompt Injection',
+      'ChatGPT Tipps Tricks deutsch Praxis produktiver arbeiten Beispiele',
+      'Claude Tipps Tricks deutsch Prompting Sicherheit',
+      'Mistral KI Tipps deutsch Anleitungen Best Practices',
+      'Llama KI Tipps deutsch Datenschutz Open-Source Modelle'
+    ];
+    let merged = [];
+    for (const q of queries){
+      try { merged = merged.concat(await tavilySearch(q, doms, 6)); } catch {}
+    }
+    const items = dedupe(merged).slice(0, 14);
     newsCache = { ts: now, key: cacheKey, items };
     res.json({ ok: true, items, cached: false });
   } catch (err) {
     console.error('[news] error', err);
-    res.json({ ok: true, items: [] }); // degrade gracefully
+    res.json({ ok: true, items: [] });
   }
 });
 
 api.get('/daily', async (_req, res) => {
   try {
-    // Reuse current cache; if empty, fetch a small list
     if (!newsCache.items?.length) {
-      newsCache.items = await tavilySearch('KI Nachrichten Deutschland – Schwerpunkt Praxis & Tools', DEFAULT_DOMAINS, 6);
+      newsCache.items = await tavilySearch('KI Deutschland Tipps Tricks Sicherheit', DEFAULT_DOMAINS, 6);
       newsCache.ts = Date.now();
       newsCache.key = 'daily';
     }
@@ -133,13 +152,36 @@ api.post('/run', async (req, res) => {
   }
 });
 
-// Mount router at /api and /_api for backwards compatibility
+// SSE streaming endpoint (simulated chunking)
+api.get('/run/stream', async (req, res) => {
+  try {
+    const input = (req.query?.q || '').toString().trim();
+    if (!input) { res.writeHead(400); return res.end('missing q'); }
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*'
+    });
+    const system = 'Du bist ein prägnanter, hilfreicher Assistent. Antworte auf Deutsch, kurz und konkret.';
+    const text = await completeText(input, { system });
+    // stream chunks by sentence
+    const parts = text.split(/(?<=[.!?])\s+/);
+    for (const p of parts){
+      res.write(`data: ${p}\n\n`);
+      await sleep(140);
+    }
+    res.write('data: [DONE]\n\n');
+    res.end();
+  } catch (err) {
+    console.error('[run/stream] error', err);
+    try { res.write('data: [ERROR]\n\n'); res.end(); } catch {}
+  }
+});
+
 app.use('/api', api);
 app.use('/_api', api);
 
-/* -------------------- 404 & Error -------------------- */
 app.use((req, res) => res.status(404).json({ ok: false, error: 'not_found' }));
 
-app.listen(PORT, () => {
-  console.log(`[hohl.rocks-back] listening on :${PORT}`);
-});
+app.listen(PORT, () => console.log(`[hohl.rocks-back] listening on :${PORT}`));
