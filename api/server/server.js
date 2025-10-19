@@ -1,7 +1,8 @@
 /**
- * hohl.rocks backend — v2.2
+ * hohl.rocks backend — v2.3
  * - Health: /healthz, /readyz
- * - API: /api/news, /api/daily, /api/run (JSON), /api/run/stream (SSE)
+ * - API: /api/news, /api/daily, /api/run (JSON), /api/run/stream (SSE native)
+ * - Metrics: /api/metrics (console only when METRICS=console)
  * - Alias: router at /api and /_api
  */
 import express from 'express';
@@ -12,7 +13,7 @@ import compression from 'compression';
 import { setTimeout as sleep } from 'timers/promises';
 
 import { TOP_PROMPTS } from './prompts.js';
-import { completeText } from './share.llm.js';
+import { completeText, streamText } from './share.llm.js';
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -34,7 +35,6 @@ app.use(compression());
 
 /* -------------------- Health -------------------- */
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
-
 app.get('/readyz', (_req, res) => {
   const issues = [];
   if (!process.env.TAVILY_API_KEY) issues.push('TAVILY_API_KEY missing');
@@ -76,10 +76,10 @@ async function tavilySearch(query, domains = DEFAULT_DOMAINS, maxResults = 10){
 }
 
 function dedupe(items){
-  const seen = new Set();
-  const out = [];
+  const seen = new Set(); const out = [];
   for (const it of items){
-    const key = new URL(it.url).hostname.replace(/^www\./,'') + '|' + (it.title||'').slice(0,80);
+    let host=''; try{ host = new URL(it.url).hostname.replace(/^www\./,''); } catch {}
+    const key = host + '|' + (it.title||'').slice(0,80);
     if (!seen.has(key)){ seen.add(key); out.push(it); }
   }
   return out;
@@ -96,7 +96,6 @@ api.get('/news', async (req, res) => {
     if (newsCache.items.length && now - newsCache.ts < CACHE_MS && newsCache.key === cacheKey){
       return res.json({ ok: true, items: newsCache.items, cached: true });
     }
-    // German KI-relevant queries: Sicherheit + Praxis + Tool-Tipps
     const queries = [
       'KI Sicherheit Deutschland aktuelle Warnungen KI-Sicherheit Data Leakage Prompt Injection',
       'ChatGPT Tipps Tricks deutsch Praxis produktiver arbeiten Beispiele',
@@ -108,7 +107,7 @@ api.get('/news', async (req, res) => {
     for (const q of queries){
       try { merged = merged.concat(await tavilySearch(q, doms, 6)); } catch {}
     }
-    const items = dedupe(merged).slice(0, 14);
+    const items = dedupe(merged).slice(0, 16);
     newsCache = { ts: now, key: cacheKey, items };
     res.json({ ok: true, items, cached: false });
   } catch (err) {
@@ -135,16 +134,15 @@ api.get('/daily', async (_req, res) => {
   }
 });
 
-api.get('/news/top', (_req, res) => {
-  res.json({ ok: true, items: TOP_PROMPTS });
-});
+api.get('/news/top', (_req, res) => res.json({ ok: true, items: TOP_PROMPTS }));
 
 api.post('/run', async (req, res) => {
   try {
     const input = (req.body?.input || '').toString().trim();
+    const euOnly = String(req.query?.eu || req.body?.eu || process.env.EU_ONLY) === '1';
     if (!input) return res.status(400).json({ ok: false, error: 'missing_input' });
     const system = 'Du bist ein prägnanter, hilfreicher Assistent. Antworte auf Deutsch, kurz und konkret.';
-    const text = await completeText(input, { system });
+    const text = await completeText(input, { system, euOnly });
     res.json({ ok: true, result: text });
   } catch (err) {
     console.error('[run] error', err);
@@ -152,10 +150,11 @@ api.post('/run', async (req, res) => {
   }
 });
 
-// SSE streaming endpoint (simulated chunking)
+// SSE streaming endpoint (native passthrough)
 api.get('/run/stream', async (req, res) => {
   try {
     const input = (req.query?.q || '').toString().trim();
+    const euOnly = String(req.query?.eu || process.env.EU_ONLY) === '1';
     if (!input) { res.writeHead(400); return res.end('missing q'); }
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -164,13 +163,9 @@ api.get('/run/stream', async (req, res) => {
       'Access-Control-Allow-Origin': '*'
     });
     const system = 'Du bist ein prägnanter, hilfreicher Assistent. Antworte auf Deutsch, kurz und konkret.';
-    const text = await completeText(input, { system });
-    // stream chunks by sentence
-    const parts = text.split(/(?<=[.!?])\s+/);
-    for (const p of parts){
-      res.write(`data: ${p}\n\n`);
-      await sleep(140);
-    }
+    await streamText(input, { system, euOnly }, (tok)=> {
+      res.write(`data: ${tok}\n\n`);
+    });
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (err) {
@@ -179,9 +174,16 @@ api.get('/run/stream', async (req, res) => {
   }
 });
 
+// Minimal metrics (console only)
+api.post('/metrics', (req, res) => {
+  if (process.env.METRICS === 'console'){
+    const { type, meta } = req.body || {};
+    console.log('[metrics]', type, meta || {});
+  }
+  res.json({ ok: true });
+});
+
 app.use('/api', api);
 app.use('/_api', api);
-
 app.use((req, res) => res.status(404).json({ ok: false, error: 'not_found' }));
-
-app.listen(PORT, () => console.log(`[hohl.rocks-back] listening on :${PORT}`));
+app.listen(PORT, () => console.log(`[hohl.rocks-back] :${PORT}`));
