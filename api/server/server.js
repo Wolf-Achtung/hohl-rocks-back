@@ -28,7 +28,7 @@ app.get('/readyz', (_req, res) => {
   res.json({ ok: issues.length === 0, issues });
 });
 
-/* ---------------- Tavily helpers (DACH) ---------------- */
+/* ---------- Helpers ---------- */
 function withTimeout(ms){
   const controller = new AbortController();
   const id = setTimeout(()=> controller.abort('timeout'), ms);
@@ -42,10 +42,28 @@ function filterAllowed(items, domains){
 function dedupe(items){
   const seen = new Set(); const out = [];
   for (const it of items){
-    const k = hostOf(it.url)+'|'+(it.title||'').slice(0,120);
+    const k = hostOf(it.url)+'|'+(it.title||'').slice(0,140);
     if (!seen.has(k)){ seen.add(k); out.push(it); }
   }
   return out;
+}
+function containsAI(title){
+  return /\b(ki|künstliche intelligenz|chatgpt|claude|mistral|llama|prompt|prompts)\b/i.test(title||'');
+}
+function whyLabel(title){
+  const t = (title||'').toLowerCase();
+  if (/(how[- ]?to|anleitung|so geht|leitfaden|guide|praxis|hands[- ]?on|workflows?)/.test(t)) return 'How‑to';
+  if (/(tipps|tricks|prompt|prompts|beispiele)/.test(t)) return 'Prompting';
+  if (/(sicherheit|security|schutz|leak|prompt injection|risiko)/.test(t)) return 'Sicherheit';
+  if (/(eu ai act|gesetz|regulierung|compliance|ds?gvo?)/.test(t)) return 'Regulierung';
+  if (/(update|release|modell|model|feature)/.test(t)) return 'Update';
+  return 'Praxis';
+}
+function setCacheHeaders(res, ttlHours=24){
+  const maxAge = 600;             // 10 min browser
+  const sMaxAge = ttlHours*60*60; // CDN
+  res.set('Cache-Control', `public, max-age=${maxAge}, s-maxage=${sMaxAge}, stale-while-revalidate=86400`);
+  res.set('Vary', 'Accept-Encoding');
 }
 
 async function tavily(query, domains, maxResults=8, ms=8000){
@@ -66,7 +84,7 @@ async function tavily(query, domains, maxResults=8, ms=8000){
   } catch(e){ cancel(); console.error('[tavily]', e.message||e); return []; }
 }
 
-/* ---------------- Scoring / Filtering ---------------- */
+/* ---------- Scoring ---------- */
 function scoreTips(it){
   const h = hostOf(it.url);
   const weights = new Map([
@@ -89,16 +107,13 @@ function scoreNews(it){
   ]);
   const title = (it.title||'').toLowerCase();
   const bonus = [
-    /eu ai act|gesetz|regulierung|sicherheit|security|risiko|update|release|neues modell|modell[- ]?update|schutz/,
+    /eu ai act|gesetz|regulierung|compliance|sicherheit|security|risiko|update|release|modell/,
     /ki|künstliche intelligenz|chatgpt|claude|mistral|llama/
   ].reduce((acc, re) => acc + (re.test(title) ? 2 : 0), 0);
   return (weights.get(h) || 1) + bonus;
 }
-function containsAI(title){
-  return /ki|künstliche intelligenz|chatgpt|claude|mistral|llama|prompt|prompts/i.test(title||'');
-}
 
-/* ---------------- SWR caches ---------------- */
+/* ---------- SWR caches ---------- */
 const newsState = { cache:{ ts:0, key:'', items:[] }, refreshing:false };
 const tipsState = { cache:{ ts:0, key:'', items:[] }, refreshing:false };
 
@@ -109,13 +124,13 @@ async function refreshGeneric({ queries, domains, scoreFn, stateRef }){
     const results = await Promise.all(queries.map(q => tavily(q, domains, 8)));
     let merged = results.flat();
     merged = dedupe(merged).filter(it => containsAI(it.title));
+    merged = merged.map(it => ({ ...it, why: whyLabel(it.title) }));
     merged.sort((a,b)=> scoreFn(b)-scoreFn(a));
     stateRef.cache = { ts: Date.now(), key: domains.join(','), items: merged.slice(0, 20) };
   } catch(e){ console.error('[refreshGeneric]', e); }
   finally { stateRef.refreshing = false; }
 }
 
-/* ---------------- Routes ---------------- */
 app.get('/api/tips', async (req, res) => {
   try{
     const doms = (process.env.TIPS_DOMAINS || 'the-decoder.de,heise.de,golem.de,t3n.de,computerbase.de,chip.de,computerwoche.de,datenschutz-notizen.de').split(',').map(s=>s.trim()).filter(Boolean);
@@ -133,13 +148,13 @@ app.get('/api/tips', async (req, res) => {
     ];
 
     if (!fresh && !tipsState.refreshing) refreshGeneric({ queries, domains: doms, scoreFn: scoreTips, stateRef: tipsState });
-    if (prefetch) return res.json({ ok:true, cached: !!tipsState.cache.items.length, stale: !fresh, items: tipsState.cache.items });
+    if (prefetch){ setCacheHeaders(res, ttlHours); return res.json({ ok:true, cached: !!tipsState.cache.items.length, stale: !fresh, items: tipsState.cache.items }); }
 
-    if (tipsState.cache.items.length) return res.json({ ok:true, items: tipsState.cache.items, cached:fresh });
+    if (tipsState.cache.items.length){ setCacheHeaders(res, ttlHours); return res.json({ ok:true, items: tipsState.cache.items, cached:fresh }); }
 
     const start = Date.now();
     while (!tipsState.cache.items.length && (Date.now() - start) < 6000){ await new Promise(r => setTimeout(r, 120)); }
-    return res.json({ ok:true, items: tipsState.cache.items || [], cached:false });
+    setCacheHeaders(res, ttlHours); return res.json({ ok:true, items: tipsState.cache.items || [], cached:false });
   } catch(e){ console.error('[tips]', e); res.json({ ok:true, items:[] }); }
 });
 
@@ -159,24 +174,24 @@ app.get('/api/news', async (req, res) => {
     ];
 
     if (!fresh && !newsState.refreshing) refreshGeneric({ queries, domains: doms, scoreFn: scoreNews, stateRef: newsState });
-    if (prefetch) return res.json({ ok:true, cached: !!newsState.cache.items.length, stale: !fresh, items: newsState.cache.items });
+    if (prefetch){ setCacheHeaders(res, ttlHours); return res.json({ ok:true, cached: !!newsState.cache.items.length, stale: !fresh, items: newsState.cache.items }); }
 
-    if (newsState.cache.items.length) return res.json({ ok:true, items: newsState.cache.items, cached:fresh });
+    if (newsState.cache.items.length){ setCacheHeaders(res, ttlHours); return res.json({ ok:true, items: newsState.cache.items, cached:fresh }); }
 
     const start = Date.now();
     while (!newsState.cache.items.length && (Date.now() - start) < 6000){ await new Promise(r => setTimeout(r, 120)); }
-    return res.json({ ok:true, items: newsState.cache.items || [], cached:false });
+    setCacheHeaders(res, ttlHours); return res.json({ ok:true, items: newsState.cache.items || [], cached:false });
   } catch(e){ console.error('[news]', e); res.json({ ok:true, items:[] }); }
 });
 
 app.get('/api/daily', async (_req, res) => {
   try {
-    // Daily priorisiert Tipps (Praxisnutzen)
     if (!tipsState.cache.items?.length) {
       const doms = (process.env.TIPS_DOMAINS || 'the-decoder.de,heise.de,golem.de,t3n.de,computerbase.de,chip.de,computerwoche.de,datenschutz-notizen.de').split(',').map(s=>s.trim()).filter(Boolean);
       await refreshGeneric({ queries: ['deutsch ChatGPT Tipps Tricks Praxis', 'deutsch Claude Prompting How-to', 'deutsch Mistral LLM Alltag Tipps'], domains: doms, scoreFn: scoreTips, stateRef: tipsState });
     }
-    const picks = tipsState.cache.items.slice(0, 6).map((it, i) => ({ title: i === 0 ? 'Spotlight' : `Tipp ${i}`, url: it.url }));
+    setCacheHeaders(res, 12);
+    const picks = tipsState.cache.items.slice(0, 6).map((it, i) => ({ title: i === 0 ? 'Spotlight' : `Tipp ${i}`, url: it.url, why: it.why }));
     res.json({ ok: true, items: picks });
   } catch(e){ console.error('[daily]', e); res.json({ ok:true, items:[] }); }
 });
@@ -207,7 +222,7 @@ app.get('/api/run/stream', async (req, res) => {
 
 app.post('/api/metrics', (req,res)=>{ if (process.env.METRICS==='console'){ console.log('[metrics]', req.body?.type, req.body?.meta||{}); } res.json({ok:true}); });
 
-// Alias
+// Alias for /_api
 app.use('/_api', (req,res,next)=>{ req.url = req.originalUrl.replace(/^\/_api/, '/api'); next(); }, app._router);
 
 app.use((req,res)=> res.status(404).json({ ok:false, error:'not_found' }));
