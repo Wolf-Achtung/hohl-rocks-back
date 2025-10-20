@@ -1,6 +1,5 @@
 # syntax=docker/dockerfile:1.7
-ARG BASE_IMAGE=public.ecr.aws/docker/library/node:20-bookworm-slim
-FROM ${BASE_IMAGE} AS base
+FROM public.ecr.aws/docker/library/node:20-bookworm-slim AS base
 
 ENV NODE_ENV=production \
     PORT=8080 \
