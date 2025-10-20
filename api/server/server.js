@@ -141,6 +141,235 @@ app.get('/api/prompts', (req, res) => {
   }
 });
 
+// Run endpoint for Bubble interactions - WICHTIGER NEUER ENDPOINT!
+app.post('/api/run', async (req, res) => {
+  try {
+    const { input, payload } = req.body;
+    const eu = req.query.eu === '1';
+    
+    console.log('[API] /run called with:', { input, payload, eu });
+    
+    // Parse bubble ID from input
+    let bubbleId = null;
+    const bubbleMatch = input?.match(/\[Bubble (\w+)/);
+    if (bubbleMatch) {
+      bubbleId = bubbleMatch[1];
+    }
+    
+    // Generate response based on bubble type
+    let result = '';
+    
+    switch(bubbleId) {
+      case 'briefing':
+        result = `**Briefing-Assistent aktiviert** 📊
+
+Ich helfe Ihnen, ein strukturiertes Executive Briefing zu erstellen.
+
+**Vorlage für Ihr Briefing:**
+
+1. **Kontext**: Kurze Situationsbeschreibung
+2. **Zahlen & Fakten**: Die wichtigsten Metriken
+3. **Risiken**: Potenzielle Herausforderungen
+4. **Option A**: Erste Handlungsoption
+5. **Option B**: Alternative Handlungsoption
+6. **Empfehlung**: Klare Handlungsempfehlung
+7. **Nächste Schritte**: Konkrete Maßnahmen
+
+Nutzen Sie diese Struktur für Ihre nächste Präsentation!`;
+        break;
+        
+      case 'agenda':
+        result = `**Meeting-Agenda Generator** ⏰
+
+Hier ist Ihre optimierte 30-Minuten-Agenda:
+
+**00:00-00:05** - Check-in & Ziele
+- Kurze Begrüßung
+- Agenda-Überblick
+- Erwartete Ergebnisse
+
+**00:05-00:15** - Hauptthema
+- Status Update
+- Kernpunkte diskutieren
+- Fragen klären
+
+**00:15-00:25** - Entscheidungen
+- Optionen bewerten
+- Entscheidung treffen
+- Verantwortlichkeiten klären
+
+**00:25-00:30** - Next Steps
+- Aufgaben verteilen
+- Timeline festlegen
+- Folgetermin vereinbaren`;
+        break;
+        
+      case 'pitch':
+        result = `**60-Sekunden Pitch Formel** 🎯
+
+Ihr perfekter Elevator Pitch:
+
+**Sekunde 0-10: Der Hook**
+"Wussten Sie, dass [überraschende Statistik/Fakt]?"
+
+**Sekunde 10-20: Das Problem**
+"Viele Unternehmen kämpfen mit [konkretes Problem]."
+
+**Sekunde 20-35: Die Lösung**
+"Wir haben [Ihre Lösung] entwickelt, die [Hauptvorteil] ermöglicht."
+
+**Sekunde 35-50: Der Beweis**
+"Bereits [Anzahl] Kunden konnten dadurch [konkretes Ergebnis] erreichen."
+
+**Sekunde 50-60: Call-to-Action**
+"Lassen Sie uns in 15 Minuten besprechen, wie das auch für Sie funktioniert."
+
+Üben Sie diese Struktur mit Ihrem konkreten Thema!`;
+        break;
+        
+      case 'risks':
+        result = `**Risiko-Analyse Framework** ⚠️
+
+Systematische Risikobewertung:
+
+**Risiko 1: Technisches Versagen**
+- Wahrscheinlichkeit: MITTEL
+- Impact: HOCH
+- Gegenmaßnahme: Redundante Systeme, regelmäßige Backups
+
+**Risiko 2: Budget-Überschreitung**
+- Wahrscheinlichkeit: MITTEL
+- Impact: MITTEL
+- Gegenmaßnahme: Wöchentliches Budget-Monitoring, Puffer einplanen
+
+**Risiko 3: Verzögerungen**
+- Wahrscheinlichkeit: HOCH
+- Impact: MITTEL
+- Gegenmaßnahme: Zeitpuffer, parallele Arbeitsströme
+
+**Empfehlung**: Fokus auf Risiko 1, da höchster Impact. Implementieren Sie präventive Maßnahmen sofort.`;
+        break;
+        
+      case 'excel':
+        result = `**Excel-Formel Helfer** 📊
+
+Die wichtigsten Excel-Formeln für Ihren Alltag:
+
+**WENN-Verschachtelung:**
+=WENN(A1>100;"Hoch";WENN(A1>50;"Mittel";"Niedrig"))
+
+**SVERWEIS mit Fehlerbehandlung:**
+=WENNFEHLER(SVERWEIS(A1;Tabelle;2;FALSCH);"Nicht gefunden")
+
+**Dynamische Summe:**
+=SUMMEWENNS(Bereich;Kriterium1;Wert1;Kriterium2;Wert2)
+
+**Index + Vergleich (besser als SVERWEIS):**
+=INDEX(Ergebnis;VERGLEICH(Suchkriterium;Suchbereich;0))
+
+**Power-Tipp**: Nutzen Sie Strg+Shift+Enter für Array-Formeln!`;
+        break;
+        
+      case 'daily':
+        result = `**Täglicher Fokus Plan** ✅
+
+Ihre 3 wichtigsten Aufgaben für heute:
+
+**1. Priorität HOCH: Kritische Aufgabe**
+- Erster Schritt: Email/Slack checken für Updates
+- Zweiter Schritt: 25 Minuten fokussierte Arbeit
+
+**2. Priorität MITTEL: Wichtiges Projekt**
+- Erster Schritt: Status-Review (5 Min)
+- Zweiter Schritt: Nächsten Meilenstein definieren
+
+**3. Priorität NIEDRIG: Administrative Aufgabe**
+- Erster Schritt: Alle offenen Items sammeln
+- Zweiter Schritt: Batch-Verarbeitung (30 Min)
+
+**Energie-Management:**
+- Vormittag: Kreative/schwierige Arbeit
+- Nachmittag: Meetings & Kommunikation
+- Abend: Planung für morgen
+
+Start mit Aufgabe 1 - jetzt!`;
+        break;
+        
+      default:
+        result = `Ich bin Ihr KI-Assistent und helfe Ihnen gerne weiter! 
+
+Was kann ich für Sie tun? Probieren Sie einen der spezialisierten Assistenten:
+- Briefing-Assistent
+- Meeting-Agenda
+- 60s Pitch
+- Risiko-Analyse
+- Excel-Formeln
+- Täglicher Fokus`;
+    }
+    
+    res.json({ 
+      result,
+      success: true,
+      bubbleId,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('[API] Error in /run endpoint:', error);
+    res.status(500).json({ 
+      error: 'Processing failed',
+      message: error.message 
+    });
+  }
+});
+
+// Stream endpoint für progressive Antworten
+app.get('/api/run/stream', (req, res) => {
+  const { q, eu } = req.query;
+  
+  console.log('[API] /run/stream called with:', { q, eu });
+  
+  // Set up Server-Sent Events
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*'
+  });
+  
+  // Parse bubble from query
+  let bubbleId = null;
+  const bubbleMatch = q?.match(/\[Bubble (\w+)/);
+  if (bubbleMatch) {
+    bubbleId = bubbleMatch[1];
+  }
+  
+  // Simulate streaming response
+  const messages = [
+    `Verarbeite Anfrage für: ${bubbleId || 'Standard'}...`,
+    `Generiere Antwort...`,
+    `Fast fertig...`
+  ];
+  
+  let index = 0;
+  const interval = setInterval(() => {
+    if (index < messages.length) {
+      res.write(`data: ${messages[index]}\n\n`);
+      index++;
+    } else {
+      res.write(`data: [DONE]\n\n`);
+      clearInterval(interval);
+      res.end();
+    }
+  }, 500);
+  
+  // Clean up on client disconnect
+  req.on('close', () => {
+    clearInterval(interval);
+    res.end();
+  });
+});
+
 // LLM endpoint (for AI features)
 app.post('/api/llm/generate', async (req, res) => {
   try {
