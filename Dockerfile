@@ -1,4 +1,8 @@
 # syntax=docker/dockerfile:1.7
+#
+# >>> PLACE THIS FILE AT THE REPO ROOT AS ./Dockerfile <<<
+# Railway picks the root Dockerfile. Remove/rename any other Dockerfiles.
+#
 ARG BASE_IMAGE=public.ecr.aws/docker/library/node:20-bookworm-slim
 FROM ${BASE_IMAGE} AS base
 
@@ -11,16 +15,14 @@ WORKDIR /app
 RUN useradd -m -u 10001 appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Corepack/NPM sanity
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0         NPM_CONFIG_UPDATE_NOTIFIER=false         NPM_CONFIG_FUND=false
 
-# --- Install deps with BuildKit cache (explicit id to satisfy Railway builder) ---
+# Install API deps first for better layer caching
 COPY --chown=appuser:appuser api/package.json api/package-lock.json* ./api/
 WORKDIR /app/api
-# NOTE: Some builders require an explicit cache id. We provide it here.
 RUN --mount=type=cache,target=/home/appuser/.npm,id=npm-cache,sharing=locked         npm ci --omit=dev
 
-# --- Copy source ---
+# Copy API source
 COPY --chown=appuser:appuser api ./
 
 EXPOSE 8080
