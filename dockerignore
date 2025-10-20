@@ -1,0 +1,11 @@
+# Generic .dockerignore for Node/Monorepo
+**/.git
+**/.github
+**/.DS_Store
+**/node_modules
+**/.next
+**/dist
+**/build
+**/.cache
+**/.env*
+videos/
