@@ -1,20 +1,22 @@
 {
-  "name": "hohlrocks-backend",
-  "version": "2.3.2",
+  "name": "hohl-rocks-back",
+  "version": "2.5.1",
   "private": true,
-  "type": "module",
+  "description": "Backend API for hohl.rocks \u2013 SSE, curated news/tips, bubble engine.",
+  "main": "server/server.js",
+  "type": "commonjs",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.9.0"
   },
   "scripts": {
-    "start": "node server/server.js"
+    "start": "node server/server.js",
+    "dev": "node server/server.js"
   },
   "dependencies": {
-    "compression": "^1.7.5",
+    "compression": "^1.7.4",
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "helmet": "^7.1.0",
-    "morgan": "^1.10.0",
-    "eventsource-parser": "^1.1.0"
+    "helmet": "^7.0.0",
+    "morgan": "^1.10.0"
   }
 }

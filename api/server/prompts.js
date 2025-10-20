@@ -1,20 +1,104 @@
-// api/server/prompts.js
-export const TOP_PROMPTS = [
-  { id: 1, question: "Wo verlierst du im Alltag Zeit?", prompt: "Sortiere diese Aufgaben in drei Stufen (Sofort/Heute/Kann warten). Erstelle daraus eine 5‑Punkte‑Reihenfolge mit kurzer Begründung je Schritt. Aufgaben: " },
-  { id: 2, question: "Was kochst du aus 3 Zutaten?", prompt: "Ich habe diese Zutaten: [ZUTATEN]. Schlage ein Gericht (1 Portion) vor, mit Einkaufsliste (fehlende Zutaten) und 20‑Minuten‑Schrittplan." },
-  { id: 3, question: "Wie kannst du ein nerviges Problem neu framen?", prompt: "Formuliere 3 neue Blickwinkel (Reframing) für dieses Problem und gib je eine konkrete Mini‑Handlung: " },
-  { id: 4, question: "Wie schläfst du nächste Woche besser?", prompt: "Entwirf eine minimalistische 7‑Tage‑Schlaf‑Routine. Vorgaben: 3 Kernregeln, 1 Abendritual, 1 Notfallplan bei schlechtem Schlaf." },
-  { id: 5, question: "Was willst du in 30 Minuten verstehen?", prompt: "Leite mich durch einen Lern‑Sprint (30 Minuten) für das Thema: [THEMA]. Gib mir einen Blockplan und 5 Quizfragen mit Lösungen." },
-  { id: 6, question: "Welche 3 Captions funktionieren am besten?", prompt: "Erzeuge 3 Captions in verschiedenen Tönen (seriös, freundlich, spielerisch) für ein Foto. Thema/Kontext: [KONTEXT]." },
-  { id: 7, question: "Kannst du es einem 5‑Jährigen erklären?", prompt: "Erkläre mir [THEMA] so, dass es ein Kind (5) versteht. Benutze ein greifbares Bild/Analogien und max. 140 Wörter." },
-  { id: 8, question: "Wie triffst du heute eine gute Entscheidung?", prompt: "Gib mir ein Chef‑Briefing in 6 Bulletpoints. Struktur: Kontext · Zahlen · Risiko · Optionen A/B · Empfehlung · Nächste Schritte. Thema: " },
-  { id: 9, question: "Wie bereitest du ein heikles Gespräch vor?", prompt: "Hilf mir, ein heikles Gespräch vorzubereiten. Gib 5 Fragen und 5 Ich‑Botschaften. Kontext: " },
-  { id: 10, question: "Wie pitchst du deine Idee in 60 Sekunden?", prompt: "Erzeuge einen 60‑Sekunden‑Pitch für: " },
-  { id: 11, question: "Was sind heute deine 3 wichtigsten Aufgaben?", prompt: "Gib mir die 3 wichtigsten Aufgaben für heute und je die ersten 2 Schritte. Kontext: " },
-  { id: 12, question: "Welche Formel löst dein Tabellenproblem?", prompt: "Welche Excel/Google‑Sheets‑Formel löst dieses Problem? Kontext: " },
-  { id: 13, question: "Wie sähe eine straffe 30‑Minuten‑Agenda aus?", prompt: "Plane eine 30‑Minuten‑Agenda. Thema/Teilnehmende: " },
-  { id: 14, question: "Wo lauern hier die 3 größten Risiken?", prompt: "Analysiere die 3 größten Risiken, gib Eintrittswahrscheinlichkeit (Low/Med/High) und Gegenmaßnahme. Kontext: " },
-  { id: 15, question: "Kannst du aus diesem Link ein Chef‑Briefing machen?", prompt: "Fasse den verlinkten Artikel stichpunktartig als Entscheidungsbriefing (max. 8 Bulletpoints) zusammen. Gliedere in: Kontext · Kernaussagen · Auswirkungen · Risiken · Nächste Schritte. Link/URL: " },
-  { id: 16, question: "Was sagt dein zukünftiges Ich in 12 Monaten?", prompt: "Schreibe einen kurzen Tagebucheintrag aus der Sicht meines zukünftigen Ichs in 12 Monaten. Stichworte: KI im Alltag, gesunde Gewohnheiten, Fokus aufs Wesentliche." },
-  { id: 17, question: "Welche 5 Hebel bringen dein Projekt schneller voran?", prompt: "Analysiere mein Vorhaben und liste die 5 größten Hebel. Gib zu jedem Hebel konkrete nächste Schritte für die nächsten 48 Stunden mit Aufwand/Nutzen‑Skala (1‑5). Vorhaben: " }
+/**
+ * hohl.rocks – Promptkanon (DACH-kuratiert, komprimierte Auswahl)
+ * Vollständige Pflege in Frontend `public/data/prompts.json` möglich.
+ * Diese Server-Kopie dient für `/api/tips` sowie Bubble-Envelope-Verständnis.
+ */
+'use strict';
+
+// Minimaler Satz – kann jederzeit erweitert werden.
+// Felder: id, question, desc, prompt, tags, file, category, level, language
+const PROMPTS = [
+  {
+    id: 1,
+    question: "Schreibe eine freundliche E-Mail-Antwort",
+    desc: "Kurz, klar, höflich – mit 3 Varianten.",
+    prompt: "Formuliere eine kurze, freundliche Antwortmail. Kontext: [KONTEXT]. Gib 3 Varianten.",
+    tags: ["Alltag", "Business"],
+    file: false,
+    category: "Alltag",
+    level: "Einfach",
+    language: "de"
+  },
+  {
+    id: 2,
+    question: "Meeting-Zusammenfassung",
+    desc: "Stichpunkte und To-Dos aus Notizen extrahieren.",
+    prompt: "Erstelle aus diesen Notizen eine prägnante Zusammenfassung und To-Dos: [NOTIZEN]",
+    tags: ["Business", "Produktivität"],
+    file: false,
+    category: "Business",
+    level: "Mittel",
+    language: "de"
+  },
+  {
+    id: 3,
+    question: "Social-Post (LinkedIn)",
+    desc: "Sachlich, 3 Hook-Varianten, Call-to-Action.",
+    prompt: "Schreibe einen sachlichen LinkedIn-Post zum Thema: [THEMA]. Gib 3 Hook-Varianten und 1 CTA.",
+    tags: ["Marketing"],
+    file: false,
+    category: "Marketing",
+    level: "Mittel",
+    language: "de"
+  },
+  // --- Neue Medien/Entscheidungs-Bubbles ---
+  {
+    id: 18,
+    question: "Wie würde dein Bild aussehen?",
+    desc: "Beschreibe ein Bild – KI erstellt es.",
+    prompt: "[BESCHREIBUNG]",
+    tags: ["Kreativ","Medien"],
+    file: false,
+    category: "Kreativ",
+    level: "Mittel",
+    language: "de"
+  },
+  {
+    id: 19,
+    question: "Was siehst du auf dem Bild?",
+    desc: "Bildanalyse: KI beschreibt hochgeladenes Bild.",
+    prompt: "Bitte lade ein Bild hoch: [BILD]",
+    tags: ["Medien"],
+    file: true,
+    category: "Medien",
+    level: "Mittel",
+    language: "de"
+  },
+  {
+    id: 20,
+    question: "Willst du einen KI‑Witz hören?",
+    desc: "Einfacher Ja/Nein‑Pfad mit passender Antwort.",
+    prompt: "Antwortmöglichkeiten: Ja / Nein. [ANTWORT]",
+    tags: ["Alltag","Fun"],
+    file: false,
+    category: "Alltag",
+    level: "Einfach",
+    language: "de"
+  },
+  {
+    id: 21,
+    question: "Welcher Sound passt dazu?",
+    desc: "Kurzes Musik‑Snippet generieren lassen.",
+    prompt: "[BESCHREIBUNG]",
+    tags: ["Medien","Audio"],
+    file: false,
+    category: "Medien",
+    level: "Mittel",
+    language: "de"
+  }
 ];
+
+function getTipsList() {
+  // Aus Prompts (How-to/Prompting) eine kurze Tippsliste erzeugen
+  return PROMPTS.slice(0, 10).map(p => ({
+    id: p.id,
+    title: p.question,
+    why: p.desc,
+    tags: p.tags,
+    category: p.category,
+    level: p.level,
+    language: p.language
+  }));
+}
+
+module.exports = { PROMPTS, getTipsList };
