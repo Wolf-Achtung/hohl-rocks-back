@@ -22,8 +22,7 @@ ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
 # Copy only package files (tolerates missing package-lock.json)
 COPY --chown=appuser:appuser api/package*.json ./api/
 WORKDIR /app/api
-RUN --mount=type=cache,target=/home/appuser/.npm,id=npm-cache,sharing=locked \
-    if [ -f package-lock.json ]; then npm ci --omit=dev; else npm i --omit=dev --no-audit --no-fund; fi
+RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm i --omit=dev --no-audit --no-fund; fi
 
 # Copy application source
 COPY --chown=appuser:appuser api ./
