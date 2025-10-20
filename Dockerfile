@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 FROM public.ecr.aws/docker/library/node:20-bookworm-slim AS base
 
 ENV NODE_ENV=production \
