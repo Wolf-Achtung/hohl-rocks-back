@@ -6,6 +6,8 @@ const morgan = require('morgan');
 const path = require('path');
 const fs = require('fs').promises;
 const https = require('https');
+const crypto = require('crypto');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -40,7 +42,20 @@ app.use(cors(corsOptions));
 app.use(compression());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-app.use(morgan('combined'));
+// Global rate-limit for API
+app.use('/api', rateLimit({ windowMs: 60*1000, limit: 60, standardHeaders: true, legacyHeaders: false }));
+
+// Request ID
+app.use((req, res, next) => { 
+  req.id = (crypto.randomUUID && crypto.randomUUID()) || Math.random().toString(36).slice(2); 
+  res.setHeader('X-Request-Id', req.id); 
+  next(); 
+});
+
+// Access logs with Request ID
+morgan.token('id', (req) => req.id);
+app.use(morgan(':remote-addr - :method :url :status :res[content-length] ":referrer" ":user-agent" req_id=:id'));
+
 
 // Static files
 const videosPath = path.join(__dirname, '..', 'videos');
@@ -426,6 +441,36 @@ app.get('/api/videos', async (req, res) => {
   } catch (error) {
     console.error('Error reading videos:', error);
     res.status(500).json({ error: 'Failed to fetch videos' });
+  }
+});
+
+
+// Summarizer endpoint: returns 1-2 sentence summary for a given text
+app.post('/api/summarize', async (req, res) => {
+  try {
+    const { text, max } = req.body || {};
+    const maxSentences = Math.max(1, Math.min(3, parseInt(max || '2', 10)));
+    if (!text || typeof text !== 'string' || text.length < 10) {
+      return res.status(400).json({ error: 'Missing or too short "text" field' });
+    }
+    // Prefer Anthropic via shared generate helper if available
+    try {
+      const { generate } = require('./share.llm.js');
+      const prompt = `Fasse den folgenden Text prägnant in ${maxSentences} Sätzen auf Deutsch zusammen. Keine Einleitung, keine Liste – nur Gliederung in Sätzen:\n\n---\n${text}\n---`;
+      const result = await generate({ prompt, model: process.env.CLAUDE_MODEL || null, eu: (req.query.eu === '1') });
+      if (result && result.text) {
+        return res.json({ summary: result.text.trim() });
+      }
+    } catch (e) {
+      // fall through to local fallback
+    }
+    // Fallback: naive summarizer (first sentences)
+    const sentences = String(text).replace(/\s+/g,' ').match(/[^.!?]+[.!?]/g) || [text.slice(0,180)];
+    const summary = sentences.slice(0, maxSentences).join(' ').trim();
+    return res.json({ summary });
+  } catch (error) {
+    console.error('Error in summarize endpoint:', error);
+    res.status(500).json({ error: 'Summarization failed' });
   }
 });
 
