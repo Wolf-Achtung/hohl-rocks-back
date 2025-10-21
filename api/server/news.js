@@ -1,16 +1,12 @@
-// api/server/news.js
-// Curated DACH/Global AI feeds with TTL cache; safe parsing.
-// Node >= 18 (global fetch).
-
+// api/server/news.js v2
 import { XMLParser } from "fast-xml-parser";
 
 const TTL_HOURS = Number(process.env.NEWS_TTL_HOURS || "24");
-const ALLOWED = (process.env.NEWS_DOMAINS || "")
-  .split(",")
-  .map(s => s.trim().toLowerCase())
-  .filter(Boolean);
+const MIN_ITEMS = Number(process.env.NEWS_MIN_ITEMS || "5");
 
-// Optional JSON mapping in env overrides defaults entirely
+const ALLOWED = (process.env.NEWS_DOMAINS || "")
+  .split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+
 function getEnvFeeds() {
   const raw = process.env.NEWS_FEEDS_JSON;
   if (!raw) return null;
@@ -27,7 +23,6 @@ function getEnvFeeds() {
   }
 }
 
-// Default curated feeds (can be narrowed via NEWS_DOMAINS)
 const DEFAULT_FEEDS = {
   "the-decoder.de": ["https://the-decoder.de/feed/"],
   "heise.de": ["https://www.heise.de/rss/heise-atom.xml"],
@@ -39,10 +34,10 @@ const DEFAULT_FEEDS = {
   "gptforwork.com": ["https://gptforwork.com/blog/rss.xml"]
 };
 
-function pickFeeds() {
+function pickFeeds(includeAll=false) {
   const fromEnv = getEnvFeeds();
   let feeds = fromEnv || DEFAULT_FEEDS;
-  if (ALLOWED.length) {
+  if (!includeAll && ALLOWED.length) {
     feeds = Object.fromEntries(Object.entries(feeds).filter(([d]) => ALLOWED.includes(d)));
   }
   return feeds;
@@ -56,20 +51,13 @@ const xml = new XMLParser({
 });
 
 function normalizeItem(domain, raw) {
-  // Try Atom/RSS variants
   const title = raw.title?.text || raw.title || "";
   const link = raw.link?.href || raw.link || raw.guid?.text || "";
-  const url = typeof link === "string" ? link : (Array.isArray(raw.link) ? raw.link[0] : "");
+  const url = typeof link === "string" ? link : (Array.isArray(raw.link) ? (raw.link[0]?.href || raw.link[0]) : "");
   const desc = raw.description?.text || raw.summary?.text || raw.contentSnippet || raw.content || "";
   const dateRaw = raw.pubDate || raw.published || raw.updated || "";
   const date = dateRaw ? new Date(dateRaw).toISOString() : null;
-  return {
-    title: String(title || "").trim(),
-    url: String(url || "").trim(),
-    summary: String(desc || "").replace(/<[^>]+>/g, "").trim(),
-    date,
-    source: domain
-  };
+  return { title: String(title||"").trim(), url: String(url||"").trim(), summary: String(desc||"").replace(/<[^>]+>/g,"").trim(), date, source: domain };
 }
 
 async function fetchFeed(domain, feedUrl) {
@@ -80,7 +68,6 @@ async function fetchFeed(domain, feedUrl) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
     const data = xml.parse(text);
-    // Flatten common shapes
     const channel = data.rss?.channel || data.feed;
     const items = channel?.item || channel?.entry || [];
     const list = Array.isArray(items) ? items : [items];
@@ -93,26 +80,37 @@ async function fetchFeed(domain, feedUrl) {
 let CACHE = { at: 0, items: [] };
 
 export function registerNewsRoutes(app) {
-  app.get("/api/news", async (req, res) => {
+  app.get("/api/news", async (_req, res) => {
     try {
       const now = Date.now();
       const ttl = TTL_HOURS * 3600 * 1000;
       if (CACHE.at && (now - CACHE.at) < ttl && CACHE.items?.length) {
         return res.json({ items: CACHE.items, cached: true });
       }
-      const feeds = pickFeeds();
-      const tasks = [];
-      for (const [domain, arr] of Object.entries(feeds)) {
-        for (const url of arr) tasks.push(fetchFeed(domain, url));
+
+      async function aggregate(feeds) {
+        const tasks = [];
+        for (const [domain, arr] of Object.entries(feeds)) for (const url of arr) tasks.push(fetchFeed(domain, url));
+        const results = await Promise.allSettled(tasks);
+        const all = [];
+        for (const r of results) {
+          if (r.status === "fulfilled") all.push(...r.value);
+          else console.warn("[News] feed error:", r.reason?.message || r.reason);
+        }
+        all.sort((a,b) => (b.date||"").localeCompare((a.date||"")));
+        return all;
       }
-      const results = await Promise.allSettled(tasks);
-      const all = [];
-      for (const r of results) {
-        if (r.status === "fulfilled") all.push(...r.value);
-        else console.warn("[News] feed error:", r.reason?.message || r.reason);
+
+      // Pass 1: respect ALLOWED/DOMAINS
+      let items = await aggregate(pickFeeds(false));
+
+      // Fallback: if too few, try with full curated set (ignore ALLOWED)
+      if(items.length < MIN_ITEMS){
+        console.warn(`[News] Only ${items.length} items with allowed domains; trying full curated set…`);
+        items = await aggregate(pickFeeds(true));
       }
-      all.sort((a,b) => (b.date||"").localeCompare((a.date||"")));
-      CACHE = { at: now, items: all.slice(0, 40) };
+
+      CACHE = { at: now, items: items.slice(0, 40) };
       res.json({ items: CACHE.items, cached: false });
     } catch (e) {
       console.error("[News] error:", e);
