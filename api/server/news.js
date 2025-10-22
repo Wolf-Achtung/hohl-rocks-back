@@ -1,5 +1,5 @@
-// api/server/news.js v2
-import { XMLParser } from "fast-xml-parser";
+// api/server/news.js (CommonJS) – fixes "Cannot use import statement outside a module"
+const { XMLParser } = require("fast-xml-parser");
 
 const TTL_HOURS = Number(process.env.NEWS_TTL_HOURS || "24");
 const MIN_ITEMS = Number(process.env.NEWS_MIN_ITEMS || "5");
@@ -51,11 +51,13 @@ const xml = new XMLParser({
 });
 
 function normalizeItem(domain, raw) {
-  const title = raw.title?.text || raw.title || "";
-  const link = raw.link?.href || raw.link || raw.guid?.text || "";
-  const url = typeof link === "string" ? link : (Array.isArray(raw.link) ? (raw.link[0]?.href || raw.link[0]) : "");
-  const desc = raw.description?.text || raw.summary?.text || raw.contentSnippet || raw.content || "";
-  const dateRaw = raw.pubDate || raw.published || raw.updated || "";
+  const title = (raw?.title && (raw.title.text || raw.title)) || "";
+  const linkVal = raw?.link;
+  const url = typeof linkVal === "string"
+    ? linkVal
+    : (Array.isArray(linkVal) ? (linkVal[0]?.href || linkVal[0]) : (raw?.guid?.text || ""));
+  const desc = (raw?.description && (raw.description.text || raw.description)) || (raw?.summary?.text || raw?.contentSnippet || raw?.content || "");
+  const dateRaw = raw?.pubDate || raw?.published || raw?.updated || "";
   const date = dateRaw ? new Date(dateRaw).toISOString() : null;
   return { title: String(title||"").trim(), url: String(url||"").trim(), summary: String(desc||"").replace(/<[^>]+>/g,"").trim(), date, source: domain };
 }
@@ -68,9 +70,9 @@ async function fetchFeed(domain, feedUrl) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
     const data = xml.parse(text);
-    const channel = data.rss?.channel || data.feed;
+    const channel = data?.rss?.channel || data?.feed;
     const items = channel?.item || channel?.entry || [];
-    const list = Array.isArray(items) ? items : [items];
+    const list = Array.isArray(items) ? items : (items ? [items] : []);
     return list.map((it) => normalizeItem(domain, it)).filter(x => x.title && x.url);
   } finally {
     clearTimeout(t);
@@ -79,7 +81,7 @@ async function fetchFeed(domain, feedUrl) {
 
 let CACHE = { at: 0, items: [] };
 
-export function registerNewsRoutes(app) {
+function registerNewsRoutes(app) {
   app.get("/api/news", async (_req, res) => {
     try {
       const now = Date.now();
@@ -101,10 +103,7 @@ export function registerNewsRoutes(app) {
         return all;
       }
 
-      // Pass 1: respect ALLOWED/DOMAINS
       let items = await aggregate(pickFeeds(false));
-
-      // Fallback: if too few, try with full curated set (ignore ALLOWED)
       if(items.length < MIN_ITEMS){
         console.warn(`[News] Only ${items.length} items with allowed domains; trying full curated set…`);
         items = await aggregate(pickFeeds(true));
@@ -118,3 +117,7 @@ export function registerNewsRoutes(app) {
     }
   });
 }
+
+// Export compatible with both `require('./news')(app)` and `const {registerNewsRoutes}=require('./news')`
+module.exports = registerNewsRoutes;
+module.exports.registerNewsRoutes = registerNewsRoutes;
