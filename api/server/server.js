@@ -1,3 +1,4 @@
+// api/server/server.js - OPTIMIERT v2.0
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -5,59 +6,60 @@ const compression = require('compression');
 const morgan = require('morgan');
 const path = require('path');
 const fs = require('fs').promises;
-const https = require('https');
 const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// Middleware
+// Import modules
+const { getCorsConfig } = require('./cors');
+const { registerNewsRoutes } = require('./news');
+const { getTips } = require('./tips');
+const llm = require('./share.llm');
+const cache = require('./cache');
+
+// ===== MIDDLEWARE =====
+
+// Security
 app.use(helmet({
   contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false
 }));
 
-// CORS Configuration
-const corsOptions = {
-  origin: function (origin, callback) {
-    const allowlist = (process.env.CORS_ALLOWLIST || 'http://localhost:3000,http://localhost:8080')
-      .split(',')
-      .map(url => url.trim());
-    
-    if (!origin || allowlist.includes(origin) || 
-        allowlist.some(allowed => allowed.includes('*') && origin.includes(allowed.replace('*', '')))) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length']
-};
+// CORS
+app.use(cors(getCorsConfig()));
 
-app.use(cors(corsOptions));
+// Compression
 app.use(compression());
+
+// Body parsing
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-// Global rate-limit for API
-app.use('/api', rateLimit({ windowMs: 60*1000, limit: 60, standardHeaders: true, legacyHeaders: false }));
 
 // Request ID
 app.use((req, res, next) => { 
-  req.id = (crypto.randomUUID && crypto.randomUUID()) || Math.random().toString(36).slice(2); 
+  req.id = crypto.randomUUID?.() || Math.random().toString(36).slice(2); 
   res.setHeader('X-Request-Id', req.id); 
   next(); 
 });
 
-// Access logs with Request ID
+// Logging
 morgan.token('id', (req) => req.id);
 app.use(morgan(':remote-addr - :method :url :status :res[content-length] ":referrer" ":user-agent" req_id=:id'));
 
+// Rate limiting (per IP)
+app.use('/api', rateLimit({ 
+  windowMs: 60 * 1000,  // 1 minute
+  limit: 60,            // 60 requests per minute
+  standardHeaders: true, 
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' }
+}));
 
-// Static files
+// ===== STATIC FILES =====
+
+// Videos
 const videosPath = path.join(__dirname, '..', 'videos');
 app.use('/videos', express.static(videosPath, {
   setHeaders: (res, filePath) => {
@@ -71,286 +73,176 @@ app.use('/videos', express.static(videosPath, {
   }
 }));
 
-// Health check
+// ===== HEALTH CHECK =====
+
 app.get('/healthz', (req, res) => {
-  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+  const health = {
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+    cache: cache.getStats()
+  };
+  res.status(200).json(health);
 });
 
-// KI-API Helper Functions
-async function callClaude(prompt, model = null) {
-  if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === 'xxx') return null;
-  
-  const data = JSON.stringify({
-    model: model || process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20241022',
-    max_tokens: 1500,
-    messages: [{ role: 'user', content: prompt }],
-    temperature: 0.8
-  });
+// ===== API ROUTES =====
 
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname: 'api.anthropic.com',
-      path: '/v1/messages',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
-      }
-    }, (res) => {
-      let responseData = '';
-      res.on('data', chunk => responseData += chunk);
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(responseData);
-          resolve(res.statusCode === 200 ? parsed.content[0].text : null);
-        } catch { resolve(null); }
-      });
+// NEWS - Delegate to news module (properly integrated)
+registerNewsRoutes(app);
+
+// TIPS - Use tips module
+app.get('/api/tips', async (req, res) => {
+  try {
+    const cacheKey = 'tips:all';
+    
+    // Check cache first
+    let tips = cache.get(cacheKey);
+    
+    if (!tips) {
+      console.log('[API] Loading tips from source...');
+      tips = await getTips();
+      
+      // Cache for 24 hours
+      cache.set(cacheKey, tips, 24 * 60 * 60 * 1000);
+    } else {
+      console.log('[API] Serving tips from cache');
+    }
+    
+    res.json({ 
+      items: tips,
+      cached: !!cache.has(cacheKey)
     });
-    req.on('error', () => resolve(null));
-    req.write(data);
-    req.end();
-  });
-}
-
-async function callOpenAI(prompt, model = null) {
-  if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === 'xxx') return null;
-  
-  const data = JSON.stringify({
-    model: model || 'gpt-4o-mini',
-    messages: [{ role: 'user', content: prompt }],
-    max_tokens: 1500,
-    temperature: 0.8
-  });
-
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname: 'api.openai.com',
-      path: '/v1/chat/completions',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
-      }
-    }, (res) => {
-      let responseData = '';
-      res.on('data', chunk => responseData += chunk);
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(responseData);
-          resolve(res.statusCode === 200 ? parsed.choices[0].message.content : null);
-        } catch { resolve(null); }
-      });
+  } catch (error) {
+    console.error('[API] Error fetching tips:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch tips',
+      items: [] 
     });
-    req.on('error', () => resolve(null));
-    req.write(data);
-    req.end();
-  });
-}
+  }
+});
 
-async function callPerplexity(prompt) {
-  if (!process.env.PERPLEXITY_API_KEY || process.env.PERPLEXITY_API_KEY === 'xxx') return null;
-  
-  const data = JSON.stringify({
-    model: process.env.PERPLEXITY_MODEL || 'sonar-pro',
-    messages: [{ role: 'user', content: prompt }],
-    max_tokens: 1500,
-    temperature: 0.7
-  });
+// VIDEOS
+app.get('/api/videos', async (req, res) => {
+  try {
+    const videosDir = path.join(__dirname, '..', 'videos');
+    const files = await fs.readdir(videosDir);
+    const videos = files
+      .filter(file => file.endsWith('.mp4'))
+      .map(file => ({
+        id: file.replace('.mp4', ''),
+        filename: file,
+        url: `/videos/${file}`,
+        title: file.replace('.mp4', '').replace(/-/g, ' ').replace(/_/g, ' ')
+      }));
+    res.json({ videos });
+  } catch (error) {
+    console.error('[API] Error reading videos:', error);
+    res.status(500).json({ error: 'Failed to fetch videos' });
+  }
+});
 
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname: 'api.perplexity.ai',
-      path: '/chat/completions',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.PERPLEXITY_API_KEY}`
+// SUMMARIZE
+app.post('/api/summarize', async (req, res) => {
+  try {
+    const { text, max } = req.body || {};
+    const maxSentences = Math.max(1, Math.min(3, parseInt(max || '2', 10)));
+    
+    if (!text || typeof text !== 'string' || text.length < 10) {
+      return res.status(400).json({ error: 'Missing or too short "text" field' });
+    }
+    
+    const cacheKey = `summary:${crypto.createHash('md5').update(text).digest('hex')}:${maxSentences}`;
+    
+    // Check cache
+    let summary = cache.get(cacheKey);
+    
+    if (!summary) {
+      // Try LLM generation
+      const prompt = `Fasse den folgenden Text prägnant in ${maxSentences} Sätzen auf Deutsch zusammen. Keine Einleitung, keine Liste – nur Gliederung in Sätzen:\n\n---\n${text}\n---`;
+      
+      try {
+        const result = await llm.generate({ 
+          prompt, 
+          model: process.env.CLAUDE_MODEL || null, 
+          eu: (req.query.eu === '1') 
+        });
+        
+        if (result && result.text) {
+          summary = result.text.trim();
+        }
+      } catch (e) {
+        console.warn('[API] LLM summarization failed, using fallback:', e.message);
       }
-    }, (res) => {
-      let responseData = '';
-      res.on('data', chunk => responseData += chunk);
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(responseData);
-          resolve(res.statusCode === 200 ? parsed.choices[0].message.content : null);
-        } catch { resolve(null); }
-      });
-    });
-    req.on('error', () => resolve(null));
-    req.write(data);
-    req.end();
-  });
-}
+      
+      // Fallback: naive summarizer
+      if (!summary) {
+        const sentences = String(text).replace(/\s+/g,' ').match(/[^.!?]+[.!?]/g) || [text.slice(0,180)];
+        summary = sentences.slice(0, maxSentences).join(' ').trim();
+      }
+      
+      // Cache for 1 hour
+      cache.set(cacheKey, summary, 60 * 60 * 1000);
+    }
+    
+    res.json({ summary });
+  } catch (error) {
+    console.error('[API] Error in summarize endpoint:', error);
+    res.status(500).json({ error: 'Summarization failed' });
+  }
+});
 
-// HAUPTENDPOINT für Bubble-KI-Interaktionen
+// RUN - Main AI interaction endpoint
 app.post('/api/run', async (req, res) => {
   try {
     const { input, payload } = req.body;
     const eu = req.query.eu === '1';
     
-    console.log('[API] /run called:', { input, payload, eu });
+    console.log('[API] /run called:', { 
+      inputLength: input?.length, 
+      payload: payload ? Object.keys(payload) : null, 
+      eu 
+    });
     
+    // Extract bubble ID
     let bubbleId = null;
     const bubbleMatch = input?.match(/\[Bubble (\w+)/);
     if (bubbleMatch) {
       bubbleId = bubbleMatch[1];
     }
     
-    // Dynamische, kontextabhängige Prompts
+    // Build context from payload
     const userContext = payload?.context || payload?.topic || payload?.problem || '';
-    let aiPrompt = '';
     
-    switch(bubbleId) {
-      case 'briefing':
-        aiPrompt = `Du bist ein Executive Assistant bei McKinsey. Erstelle ein prägnantes Executive Briefing zum Thema: "${userContext || 'KI-Transformation im deutschen Mittelstand 2025'}".
-
-STRUKTUR (maximal 7 Punkte):
-1. Situation (1 Satz)
-2. Kernzahlen (3 Metriken mit Quelle)
-3. Hauptchance
-4. Hauptrisiko
-5. Option A (mit ROI)
-6. Option B (mit ROI)
-7. Empfehlung (klar, actionable)
-
-Verwende aktuelle Daten. Sei präzise. Denke wie ein CEO.`;
-        break;
-        
-      case 'agenda':
-        aiPrompt = `Erstelle eine hocheffiziente 30-Min Meeting-Agenda für: "${userContext || 'KI-Tool Evaluation für unser Team'}".
-
-Nutze diese moderne Struktur:
-- 2 Min: Check-in mit Energielevel (1-10)
-- 5 Min: Kontext & Ziel (SMART formuliert)
-- 15 Min: Kern-Diskussion (mit 3 Leitfragen)
-- 5 Min: Entscheidungen (Ja/Nein/Vertagen)
-- 3 Min: Next Steps mit Verantwortlichen
-
-Mache es interaktiv und outcome-focused. Vermeide Meeting-Klassiker-Fehler.`;
-        break;
-        
-      case 'pitch':
-        aiPrompt = `Schreibe einen mitreißenden 60-Sekunden Pitch für: "${userContext || 'Unsere revolutionäre KI-Lösung für HR-Prozesse'}".
-
-Nutze die Silicon Valley Formel:
-- Hook: Überraschende Zahl/Fakt (3 Sek)
-- Problem: Pain Point der Zielgruppe (10 Sek)
-- Lösung: Unser USP in einem Satz (15 Sek)
-- Traction: Beweis/Erfolg/Kunde (20 Sek)
-- Vision: Die Welt mit unserer Lösung (7 Sek)
-- Ask: Klarer Call-to-Action (5 Sek)
-
-Mache es emotional, memorable und investable!`;
-        break;
-        
-      case 'risks':
-        aiPrompt = `Führe eine professionelle Risikoanalyse durch für: "${userContext || 'Einführung von ChatGPT im Kundenservice'}".
-
-Identifiziere die TOP 3 Risiken nach ISO 31000:
-Für jedes Risiko:
-- Beschreibung (prägnant)
-- Wahrscheinlichkeit: % und Kategorie
-- Impact: € Schätzung oder Beschreibung
-- Risk Score (1-25)
-- Mitigation: 2 konkrete Maßnahmen
-- Residualrisiko nach Mitigation
-
-Sei realistisch, quantitativ wo möglich, und priorisiere nach Kritikalität.`;
-        break;
-        
-      case 'excel':
-        aiPrompt = `Excel-Experte: Löse dieses Problem: "${userContext || 'Ich brauche eine dynamische Dashboard-Formel für Umsatzanalyse nach Region und Produkt'}".
-
-Gib mir:
-1. Die EXAKTE deutsche Excel-Formel
-2. Englische Version (falls international)
-3. Schritt-für-Schritt Erklärung
-4. Häufige Fehlerquellen & Fixes
-5. Power-User Alternative (z.B. mit LAMBDA oder LET)
-6. Bonus: VBA-Makro wenn sinnvoll
-
-Erkläre so, dass es ein Controller sofort umsetzen kann.`;
-        break;
-        
-      case 'daily':
-        aiPrompt = `Erstelle einen High-Performance Tagesplan für: "${userContext || 'Product Manager mit 2 kritischen Launches diese Woche'}".
-
-Nutze Prinzipien von Cal Newport & Zeit-Management-Experten:
-
-MORGEN (Prime Time):
-- 1 Deep Work Block (90 Min): [Wichtigste Aufgabe]
-- Energie-Booster: [5 Min Aktivität]
-
-MITTAG:
-- Meeting-Block oder Kommunikation
-- Lunch Break (heilig!)
-
-NACHMITTAG:
-- 2-3 fokussierte Tasks (je 25 Min Pomodoro)
-- Buffer für Unerwartetes (30 Min)
-
-ABEND:
-- Shutdown-Ritual: [3 Schritte]
-- Win of the Day dokumentieren
-
-Personalisiere basierend auf dem Kontext. Sei motivierend!`;
-        break;
-        
-      default:
-        aiPrompt = `Beantworte kreativ und hilfreich: "${input}". Überrasche mit unerwarteten Einsichten. Sei konkret und actionable.`;
-    }
+    // Generate AI prompt based on bubble type
+    const aiPrompt = buildBubblePrompt(bubbleId, userContext, input);
     
-    // Versuche verschiedene KI-APIs (Fallback-Chain)
-    let result = null;
-    let usedModel = 'none';
+    // Try to generate response
+    const result = await llm.generate({ 
+      prompt: aiPrompt,
+      eu
+    });
     
-    // 1. Versuch: Claude (beste Qualität)
-    result = await callClaude(aiPrompt);
-    if (result) {
-      usedModel = process.env.CLAUDE_MODEL || 'claude-3-5-sonnet';
-    }
-    
-    // 2. Versuch: OpenAI
-    if (!result) {
-      result = await callOpenAI(aiPrompt);
-      if (result) usedModel = 'gpt-4o-mini';
-    }
-    
-    // 3. Versuch: Perplexity (mit Internetsuche)
-    if (!result && bubbleId && ['news', 'research'].includes(bubbleId)) {
-      result = await callPerplexity(aiPrompt);
-      if (result) usedModel = process.env.PERPLEXITY_MODEL || 'sonar-pro';
-    }
-    
-    // Fallback: Inspirierende Demo-Nachricht
-    if (!result) {
-      result = `🚀 **KI-Demo Modus**
-
-Diese Bubble würde normalerweise eine beeindruckende, personalisierte KI-Antwort generieren!
-
-**Was Sie hier sehen würden:**
-- Maßgeschneiderte Lösungen für "${userContext || 'Ihre Anfrage'}"
-- Kreative Ansätze, die überraschen
-- Konkrete, sofort umsetzbare Vorschläge
-- Modernste KI-Intelligenz im Einsatz
-
-💡 **Tipp:** Mit aktivierten API-Keys erleben Ihre Nutzer echte KI-Magie!
-
-*Bubble: ${bubbleId} | Timestamp: ${new Date().toISOString()}*`;
-      usedModel = 'demo';
+    // Fallback if no result
+    if (!result || !result.text) {
+      result = {
+        text: generateFallbackResponse(bubbleId, userContext),
+        model: 'demo',
+        provider: 'fallback'
+      };
     }
     
     res.json({ 
-      result,
+      result: result.text,
       success: true,
       bubbleId,
-      model: usedModel,
+      model: result.model,
+      provider: result.provider,
       timestamp: new Date().toISOString()
     });
     
   } catch (error) {
-    console.error('[API] Error:', error);
+    console.error('[API] Error in /run:', error);
     res.status(500).json({ 
       error: 'Processing failed',
       message: error.message 
@@ -358,7 +250,7 @@ Diese Bubble würde normalerweise eine beeindruckende, personalisierte KI-Antwor
   }
 });
 
-// Streaming endpoint
+// STREAM - Streaming endpoint
 app.get('/api/run/stream', (req, res) => {
   const { q, eu } = req.query;
   
@@ -369,12 +261,14 @@ app.get('/api/run/stream', (req, res) => {
     'Access-Control-Allow-Origin': '*'
   });
   
+  // Extract bubble ID
   let bubbleId = null;
   const bubbleMatch = q?.match(/\[Bubble (\w+)/);
   if (bubbleMatch) {
     bubbleId = bubbleMatch[1];
   }
   
+  // Send progress messages
   const messages = [
     `🔄 Initialisiere KI-Engine...`,
     `🧠 Analysiere Kontext: ${bubbleId}...`,
@@ -400,101 +294,154 @@ app.get('/api/run/stream', (req, res) => {
   });
 });
 
-// News endpoint
-app.get('/api/news', async (req, res) => {
+// METRICS - Simple metrics endpoint
+app.post('/api/metrics', (req, res) => {
   try {
-    const newsModule = require('./news');
-    const news = await newsModule.getNews?.() || [];
-    res.json({ items: news }); // Changed from { news } to { items }
+    const { type, meta } = req.body;
+    console.log('[Metrics]', type, meta);
+    res.json({ success: true });
   } catch (error) {
-    console.error('Error fetching news:', error);
-    res.json({ items: [] });
+    console.error('[Metrics] Error:', error);
+    res.status(500).json({ error: 'Metrics failed' });
   }
 });
 
-// Tips endpoint
-app.get('/api/tips', async (req, res) => {
-  try {
-    const tipsModule = require('./tips');
-    const tips = await tipsModule.getTips?.() || [];
-    res.json({ items: tips }); // Changed from { tips } to { items }
-  } catch (error) {
-    console.error('Error fetching tips:', error);
-    res.json({ items: [] });
-  }
-});
+// ===== HELPER FUNCTIONS =====
 
-// Other endpoints remain the same...
-app.get('/api/videos', async (req, res) => {
-  try {
-    const videosDir = path.join(__dirname, '..', 'videos');
-    const files = await fs.readdir(videosDir);
-    const videos = files
-      .filter(file => file.endsWith('.mp4'))
-      .map(file => ({
-        id: file.replace('.mp4', ''),
-        filename: file,
-        url: `/videos/${file}`,
-        title: file.replace('.mp4', '').replace(/-/g, ' ').replace(/_/g, ' ')
-      }));
-    res.json({ videos });
-  } catch (error) {
-    console.error('Error reading videos:', error);
-    res.status(500).json({ error: 'Failed to fetch videos' });
-  }
-});
+function buildBubblePrompt(bubbleId, userContext, originalInput) {
+  const context = userContext || 'Allgemeine Anfrage';
+  
+  const prompts = {
+    briefing: `Du bist ein Executive Assistant bei McKinsey. Erstelle ein prägnantes Executive Briefing zum Thema: "${context}".
 
+STRUKTUR (maximal 7 Punkte):
+1. Situation (1 Satz)
+2. Kernzahlen (3 Metriken mit Quelle)
+3. Hauptchance
+4. Hauptrisiko
+5. Option A (mit ROI)
+6. Option B (mit ROI)
+7. Empfehlung (klar, actionable)
 
-// Summarizer endpoint: returns 1-2 sentence summary for a given text
-app.post('/api/summarize', async (req, res) => {
-  try {
-    const { text, max } = req.body || {};
-    const maxSentences = Math.max(1, Math.min(3, parseInt(max || '2', 10)));
-    if (!text || typeof text !== 'string' || text.length < 10) {
-      return res.status(400).json({ error: 'Missing or too short "text" field' });
-    }
-    // Prefer Anthropic via shared generate helper if available
-    try {
-      const { generate } = require('./share.llm.js');
-      const prompt = `Fasse den folgenden Text prägnant in ${maxSentences} Sätzen auf Deutsch zusammen. Keine Einleitung, keine Liste – nur Gliederung in Sätzen:\n\n---\n${text}\n---`;
-      const result = await generate({ prompt, model: process.env.CLAUDE_MODEL || null, eu: (req.query.eu === '1') });
-      if (result && result.text) {
-        return res.json({ summary: result.text.trim() });
-      }
-    } catch (e) {
-      // fall through to local fallback
-    }
-    // Fallback: naive summarizer (first sentences)
-    const sentences = String(text).replace(/\s+/g,' ').match(/[^.!?]+[.!?]/g) || [text.slice(0,180)];
-    const summary = sentences.slice(0, maxSentences).join(' ').trim();
-    return res.json({ summary });
-  } catch (error) {
-    console.error('Error in summarize endpoint:', error);
-    res.status(500).json({ error: 'Summarization failed' });
-  }
-});
+Verwende aktuelle Daten. Sei präzise. Denke wie ein CEO.`,
 
-// Error handlers
+    agenda: `Erstelle eine hocheffiziente 30-Min Meeting-Agenda für: "${context}".
+
+Nutze diese moderne Struktur:
+- 2 Min: Check-in mit Energielevel (1-10)
+- 5 Min: Kontext & Ziel (SMART formuliert)
+- 15 Min: Kern-Diskussion (mit 3 Leitfragen)
+- 5 Min: Entscheidungen (Ja/Nein/Vertagen)
+- 3 Min: Next Steps mit Verantwortlichen
+
+Mache es interaktiv und outcome-focused. Vermeide Meeting-Klassiker-Fehler.`,
+
+    pitch: `Schreibe einen mitreißenden 60-Sekunden Pitch für: "${context}".
+
+Nutze die Silicon Valley Formel:
+- Hook: Überraschende Zahl/Fakt (3 Sek)
+- Problem: Pain Point der Zielgruppe (10 Sek)
+- Lösung: Unser USP in einem Satz (15 Sek)
+- Traction: Beweis/Erfolg/Kunde (20 Sek)
+- Vision: Die Welt mit unserer Lösung (7 Sek)
+- Ask: Klarer Call-to-Action (5 Sek)
+
+Mache es emotional, memorable und investable!`,
+
+    risks: `Führe eine professionelle Risikoanalyse durch für: "${context}".
+
+Identifiziere die TOP 3 Risiken nach ISO 31000:
+Für jedes Risiko:
+- Beschreibung (prägnant)
+- Wahrscheinlichkeit: % und Kategorie
+- Impact: € Schätzung oder Beschreibung
+- Risk Score (1-25)
+- Mitigation: 2 konkrete Maßnahmen
+- Residualrisiko nach Mitigation
+
+Sei realistisch, quantitativ wo möglich, und priorisiere nach Kritikalität.`,
+
+    excel: `Excel-Experte: Löse dieses Problem: "${context}".
+
+Gib mir:
+1. Die EXAKTE deutsche Excel-Formel
+2. Englische Version (falls international)
+3. Schritt-für-Schritt Erklärung
+4. Häufige Fehlerquellen & Fixes
+5. Power-User Alternative (z.B. mit LAMBDA oder LET)
+6. Bonus: VBA-Makro wenn sinnvoll
+
+Erkläre so, dass es ein Controller sofort umsetzen kann.`,
+
+    daily: `Erstelle einen High-Performance Tagesplan für: "${context}".
+
+Nutze Prinzipien von Cal Newport & Zeit-Management-Experten:
+
+MORGEN (Prime Time):
+- 1 Deep Work Block (90 Min): [Wichtigste Aufgabe]
+- Energie-Booster: [5 Min Aktivität]
+
+MITTAG:
+- Meeting-Block oder Kommunikation
+- Lunch Break (heilig!)
+
+NACHMITTAG:
+- 2-3 fokussierte Tasks (je 25 Min Pomodoro)
+- Buffer für Unerwartetes (30 Min)
+
+ABEND:
+- Shutdown-Ritual: [3 Schritte]
+- Win of the Day dokumentieren
+
+Personalisiere basierend auf dem Kontext. Sei motivierend!`
+  };
+  
+  return prompts[bubbleId] || `Beantworte kreativ und hilfreich: "${originalInput}". Kontext: ${context}. Sei konkret und actionable.`;
+}
+
+function generateFallbackResponse(bubbleId, userContext) {
+  return `🚀 **KI-Demo Modus**
+
+Diese Bubble würde normalerweise eine beeindruckende, personalisierte KI-Antwort generieren!
+
+**Was Sie hier sehen würden:**
+- Maßgeschneiderte Lösungen für "${userContext || 'Ihre Anfrage'}"
+- Kreative Ansätze, die überraschen
+- Konkrete, sofort umsetzbare Vorschläge
+- Modernste KI-Intelligenz im Einsatz
+
+💡 **Tipp:** Mit aktivierten API-Keys erleben Ihre Nutzer echte KI-Magie!
+
+*Bubble: ${bubbleId} | Timestamp: ${new Date().toISOString()}*`;
+}
+
+// ===== ERROR HANDLERS =====
+
 app.use((req, res) => {
-  res.status(404).json({ error: 'Not found' });
-});
-
-app.use((err, req, res, next) => {
-  console.error('Error:', err);
-  res.status(err.status || 500).json({
-    error: err.message || 'Internal server error'
+  res.status(404).json({ 
+    error: 'Not found',
+    path: req.path 
   });
 });
 
-// Start server
+app.use((err, req, res, next) => {
+  console.error('[ERROR]', err);
+  res.status(err.status || 500).json({
+    error: err.message || 'Internal server error',
+    requestId: req.id
+  });
+});
+
+// ===== START SERVER =====
+
 app.listen(PORT, () => {
-  const hasAnthropic = process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'xxx';
-  const hasOpenAI = process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'xxx';
-  const hasPerplexity = process.env.PERPLEXITY_API_KEY && process.env.PERPLEXITY_API_KEY !== 'xxx';
+  const hasAnthropic = process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'xxx' && process.env.ANTHROPIC_API_KEY !== '__SET_ME__';
+  const hasOpenAI = process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'xxx' && process.env.OPENAI_API_KEY !== '__SET_ME__';
+  const hasPerplexity = process.env.PERPLEXITY_API_KEY && process.env.PERPLEXITY_API_KEY !== 'xxx' && process.env.PERPLEXITY_API_KEY !== '__SET_ME__';
   
   console.log(`
 ╔════════════════════════════════════════╗
-║       HOHL.ROCKS Backend Server       ║
+║       HOHL.ROCKS Backend v2.0         ║
 ╠════════════════════════════════════════╣
 ║  🚀 Port: ${PORT}                         ║
 ║  🌍 Environment: ${process.env.NODE_ENV || 'development'}          ║
@@ -504,6 +451,11 @@ app.listen(PORT, () => {
 ║  Claude: ${hasAnthropic ? '✅ Aktiv' : '❌ Nicht konfiguriert'}              ║
 ║  OpenAI: ${hasOpenAI ? '✅ Aktiv' : '❌ Nicht konfiguriert'}              ║
 ║  Perplexity: ${hasPerplexity ? '✅ Aktiv' : '❌ Nicht konfiguriert'}          ║
+╠════════════════════════════════════════╣
+║  📊 Cache: ${cache.getStats().size} entries                  ║
+║  🔧 Ready for action!                  ║
 ╚════════════════════════════════════════╝
   `);
 });
+
+module.exports = app;
