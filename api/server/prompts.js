@@ -1,149 +1,108 @@
-// server/prompts.js
-const PROMPTS = [
+// api/server/prompts.js
+
+// CommonJS export of the prompt catalogue used by the bubble engine.
+// Each entry defines an id, a human‑readable question and the prompt template.
+const TOP_PROMPTS = [
   {
-    id: 'briefing',
-    title: 'Briefing-Assistent',
-    prompt: 'Erstelle ein Executive Briefing in 6 Bulletpoints. Struktur: Kontext · Zahlen · Risiko · Optionen A/B · Empfehlung · Nächste Schritte.',
-    category: 'business',
-    tags: ['business', 'executive', 'decision']
+    id: 1,
+    question: "Wo verlierst du im Alltag Zeit?",
+    prompt:
+      "Sortiere diese Aufgaben in drei Stufen (Sofort/Heute/Kann warten). Erstelle daraus eine 5‑Punkte‑Reihenfolge mit kurzer Begründung je Schritt. Aufgaben: ",
   },
   {
-    id: 'agenda',
-    title: 'Meeting-Agenda (30′)',
-    prompt: 'Plane eine effiziente 30-Minuten-Agenda mit klaren Zeitblöcken und erwarteten Ergebnissen.',
-    category: 'business',
-    tags: ['meeting', 'planning', 'efficiency']
+    id: 2,
+    question: "Was kochst du aus 3 Zutaten?",
+    prompt:
+      "Ich habe diese Zutaten: [ZUTATEN]. Schlage ein Gericht (1 Portion) vor, mit Einkaufsliste (fehlende Zutaten) und 20‑Minuten‑Schrittplan.",
   },
   {
-    id: 'pitch',
-    title: '60s Pitch',
-    prompt: 'Erzeuge einen 60-Sekunden-Pitch mit Hook, Problem, Lösung, Nutzen und Call-to-Action.',
-    category: 'business',
-    tags: ['pitch', 'presentation', 'sales']
+    id: 3,
+    question: "Wie kannst du ein nerviges Problem neu framen?",
+    prompt:
+      "Formuliere 3 neue Blickwinkel (Reframing) für dieses Problem und gib je eine konkrete Mini‑Handlung: ",
   },
   {
-    id: 'risks',
-    title: 'Risiko-Analyse',
-    prompt: 'Analysiere die 3 größten Risiken, gib Eintrittswahrscheinlichkeit (Low/Med/High) und Gegenmaßnahme.',
-    category: 'analysis',
-    tags: ['risk', 'analysis', 'planning']
+    id: 4,
+    question: "Wie schläfst du nächste Woche besser?",
+    prompt:
+      "Entwirf eine minimalistische 7‑Tage‑Schlaf‑Routine. Vorgaben: 3 Kernregeln, 1 Abendritual, 1 Notfallplan bei schlechtem Schlaf.",
   },
   {
-    id: 'excel',
-    title: 'Excel/Sheets Formelhilfe',
-    prompt: 'Welche Excel/Google-Sheets-Formel löst dieses Problem? Gib die Formel mit Erklärung und Beispiel.',
-    category: 'technical',
-    tags: ['excel', 'sheets', 'formulas']
+    id: 5,
+    question: "Was willst du in 30 Minuten verstehen?",
+    prompt:
+      "Leite mich durch einen Lern‑Sprint (30 Minuten) für das Thema: [THEMA]. Gib mir einen Blockplan und 5 Quizfragen mit Lösungen.",
   },
   {
-    id: 'daily',
-    title: 'Täglicher Fokus',
-    prompt: 'Gib mir die 3 wichtigsten Aufgaben für heute und je die ersten 2 Schritte.',
-    category: 'productivity',
-    tags: ['productivity', 'planning', 'daily']
+    id: 6,
+    question: "Welche 3 Captions funktionieren am besten?",
+    prompt:
+      "Erzeuge 3 Captions in verschiedenen Tönen (seriös, freundlich, spielerisch) für ein Foto. Thema/Kontext: [KONTEXT].",
   },
   {
-    id: 'creative',
-    title: 'Creative Writing',
-    prompt: 'Schreibe eine kreative Geschichte über...',
-    category: 'creative',
-    tags: ['writing', 'creative', 'storytelling']
+    id: 7,
+    question: "Kannst du es einem 5‑Jährigen erklären?",
+    prompt:
+      "Erkläre mir [THEMA] so, dass es ein Kind (5) versteht. Benutze ein greifbares Bild/Analogien und max. 140 Wörter.",
   },
   {
-    id: 'technical',
-    title: 'Technical Documentation',
-    prompt: 'Erkläre die technischen Details von... strukturiert und verständlich.',
-    category: 'technical',
-    tags: ['documentation', 'technical', 'explanation']
+    id: 8,
+    question: "Wie triffst du heute eine gute Entscheidung?",
+    prompt:
+      "Gib mir ein Chef‑Briefing in 6 Bulletpoints. Struktur: Kontext · Zahlen · Risiko · Optionen A/B · Empfehlung · Nächste Schritte. Thema: ",
   },
   {
-    id: 'analysis',
-    title: 'Data Analysis',
-    prompt: 'Analysiere die folgenden Daten und gib mir die wichtigsten Erkenntnisse...',
-    category: 'analysis',
-    tags: ['data', 'analysis', 'insights']
+    id: 9,
+    question: "Wie bereitest du ein heikles Gespräch vor?",
+    prompt:
+      "Hilf mir, ein heikles Gespräch vorzubereiten. Gib 5 Fragen und 5 Ich‑Botschaften. Kontext: ",
   },
   {
-    id: 'summary',
-    title: 'Executive Summary',
-    prompt: 'Fasse den folgenden Text als Executive Summary in max. 5 Bulletpoints zusammen.',
-    category: 'business',
-    tags: ['summary', 'executive', 'brief']
+    id: 10,
+    question: "Wie pitchst du deine Idee in 60 Sekunden?",
+    prompt: "Erzeuge einen 60‑Sekunden‑Pitch für: ",
   },
   {
-    id: 'translation',
-    title: 'Professional Translation',
-    prompt: 'Übersetze den folgenden Text professionell und kontextgerecht nach [SPRACHE].',
-    category: 'language',
-    tags: ['translation', 'language', 'professional']
+    id: 11,
+    question: "Was sind heute deine 3 wichtigsten Aufgaben?",
+    prompt:
+      "Gib mir die 3 wichtigsten Aufgaben für heute und je die ersten 2 Schritte. Kontext: ",
   },
   {
-    id: 'debug',
-    title: 'Code Debugging',
-    prompt: 'Analysiere diesen Code, finde Fehler und schlage Verbesserungen vor.',
-    category: 'technical',
-    tags: ['code', 'debugging', 'programming']
+    id: 12,
+    question: "Welche Formel löst dein Tabellenproblem?",
+    prompt: "Welche Excel/Google‑Sheets‑Formel löst dieses Problem? Kontext: ",
   },
   {
-    id: 'email',
-    title: 'Professional Email',
-    prompt: 'Schreibe eine professionelle E-Mail für folgenden Kontext:',
-    category: 'communication',
-    tags: ['email', 'communication', 'professional']
+    id: 13,
+    question: "Wie sähe eine straffe 30‑Minuten‑Agenda aus?",
+    prompt: "Plane eine 30‑Minuten‑Agenda. Thema/Teilnehmende: ",
   },
   {
-    id: 'strategy',
-    title: 'Strategic Analysis',
-    prompt: 'Erstelle eine SWOT-Analyse für folgendes Vorhaben:',
-    category: 'strategy',
-    tags: ['strategy', 'swot', 'analysis']
+    id: 14,
+    question: "Wo lauern hier die 3 größten Risiken?",
+    prompt:
+      "Analysiere die 3 größten Risiken, gib Eintrittswahrscheinlichkeit (Low/Med/High) und Gegenmaßnahme. Kontext: ",
   },
   {
-    id: 'learning',
-    title: '30-Minute Learning Sprint',
-    prompt: 'Erstelle einen 30-Minuten-Lernplan für [THEMA] mit Zeitblöcken und 5 Quizfragen.',
-    category: 'learning',
-    tags: ['learning', 'education', 'sprint']
-  }
+    id: 15,
+    question: "Kannst du aus diesem Link ein Chef‑Briefing machen?",
+    prompt:
+      "Fasse den verlinkten Artikel stichpunktartig als Entscheidungsbriefing (max. 8 Bulletpoints) zusammen. Gliedere in: Kontext · Kernaussagen · Auswirkungen · Risiken · Nächste Schritte. Link/URL: ",
+  },
+  {
+    id: 16,
+    question: "Was sagt dein zukünftiges Ich in 12 Monaten?",
+    prompt:
+      "Schreibe einen kurzen Tagebucheintrag aus der Sicht meines zukünftigen Ichs in 12 Monaten. Stichworte: KI im Alltag, gesunde Gewohnheiten, Fokus aufs Wesentliche.",
+  },
+  {
+    id: 17,
+    question: "Welche 5 Hebel bringen dein Projekt schneller voran?",
+    prompt:
+      "Analysiere mein Vorhaben und liste die 5 größten Hebel. Gib zu jedem Hebel konkrete nächste Schritte für die nächsten 48 Stunden mit Aufwand/Nutzen‑Skala (1‑5). Vorhaben: ",
+  },
 ];
 
-function getTipsList() {
-  return PROMPTS.map(p => ({
-    id: p.id,
-    title: p.title,
-    preview: p.prompt.substring(0, 100) + '...',
-    category: p.category,
-    tags: p.tags
-  }));
-}
-
-function getPromptById(id) {
-  return PROMPTS.find(p => p.id === id);
-}
-
-function getPromptsByCategory(category) {
-  return PROMPTS.filter(p => p.category === category);
-}
-
-function getPromptsByTag(tag) {
-  return PROMPTS.filter(p => p.tags && p.tags.includes(tag));
-}
-
-function getAllCategories() {
-  return [...new Set(PROMPTS.map(p => p.category))];
-}
-
-function getAllTags() {
-  const allTags = PROMPTS.flatMap(p => p.tags || []);
-  return [...new Set(allTags)];
-}
-
-module.exports = { 
-  PROMPTS, 
-  getTipsList,
-  getPromptById,
-  getPromptsByCategory,
-  getPromptsByTag,
-  getAllCategories,
-  getAllTags
-};
+// Export in CommonJS format
+module.exports = { TOP_PROMPTS };

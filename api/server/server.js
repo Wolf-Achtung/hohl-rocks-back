@@ -1,11 +1,11 @@
 // api/server/server.js
-import express from 'express';
-import cors from 'cors';
-import helmet from 'helmet';
-import morgan from 'morgan';
-import compression from 'compression';
-import { completeText, streamText } from './share.llm.js';
-import { TOP_PROMPTS } from './prompts.js';
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const morgan = require('morgan');
+const compression = require('compression');
+const { completeText, streamText } = require('./share.llm.js');
+const { TOP_PROMPTS } = require('./prompts.js');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
