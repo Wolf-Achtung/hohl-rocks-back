@@ -1,17 +1,19 @@
 {
-  "name": "hohl-rocks-api",
+  "name": "hohlrocks-backend",
+  "version": "2.3.2",
   "private": true,
-  "type": "commonjs",
   "engines": {
     "node": ">=20"
   },
+  "scripts": {
+    "start": "node server/server.js"
+  },
   "dependencies": {
-    "express": "^4.19.2",
+    "compression": "^1.7.5",
     "cors": "^2.8.5",
+    "express": "^4.19.2",
     "helmet": "^7.1.0",
-    "compression": "^1.7.4",
     "morgan": "^1.10.0",
-    "express-rate-limit": "^7.0.0",
-    "fast-xml-parser": "^4.3.6"
+    "eventsource-parser": "^1.1.0"
   }
 }
