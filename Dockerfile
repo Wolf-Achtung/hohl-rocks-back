@@ -1,34 +1,23 @@
-FROM public.ecr.aws/docker/library/node:20-bookworm-slim AS base
+# Use a stable Node base image.  We rely on the public AWS ECR mirror of official images to avoid rate limits
+FROM public.ecr.aws/docker/library/node:20-bookworm-slim
 
-ENV NODE_ENV=production \
-    PORT=8080 \
-    DEBIAN_FRONTEND=noninteractive \
-    TZ=Etc/UTC
-
-USER root
-RUN apt-get update -y && apt-get install -y --no-install-recommends \
-    ca-certificates tini curl \
-    && rm -rf /var/lib/apt/lists/*
-
+# Set working directory
 WORKDIR /app
-RUN useradd -m -u 10001 appuser && chown -R appuser:appuser /app
-USER appuser
 
-ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
-    NPM_CONFIG_UPDATE_NOTIFIER=false \
-    NPM_CONFIG_FUND=false
-
-# Copy only package files (tolerates missing package-lock.json)
-COPY --chown=appuser:appuser api/package*.json ./api/
-WORKDIR /app/api
-RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm i --omit=dev --no-audit --no-fund; fi
+# Install dependencies for the API.  Copy only package.json first to leverage layer caching
+COPY api/package.json ./api/package.json
+RUN set -ex \
+  && cd /app/api \
+  && npm install --omit=dev
 
 # Copy application source
-COPY --chown=appuser:appuser api ./
+COPY api /app/api
 
+# Environment configuration
+ENV NODE_ENV=production PORT=8080
+
+# Expose the service port
 EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
-  CMD curl -fsS http://127.0.0.1:${PORT}/healthz || exit 1
 
-ENTRYPOINT ["/usr/bin/tini","--"]
-CMD ["node","server/server.js"]
+# Run the server.  We avoid using a package manager here to keep the runtime lean.
+CMD ["node", "/app/api/server/server.js"]
