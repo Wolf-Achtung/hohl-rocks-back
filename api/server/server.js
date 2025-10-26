@@ -6,6 +6,12 @@ const morgan = require('morgan');
 const compression = require('compression');
 const { completeText, streamText } = require('./share.llm.js');
 const { TOP_PROMPTS } = require('./prompts.js');
+// Bring in curated news and tips providers.  These modules expose a
+// getNews() and getTips() function respectively, which handle caching
+// internally.  See api/server/news.js and api/server/tips.js for
+// details.
+const { getNews } = require('./news.js');
+const { getTips } = require('./tips.js');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -24,29 +30,31 @@ app.use(express.json({ limit: '1mb' }));
 app.use(morgan('tiny'));
 app.use(compression());
 
-// In-memory caches for news and tips.  Entries are refreshed based on TTL settings in hours.
+// In-memory caches for news and tips.  Entries are refreshed based on TTL
+// settings in hours.  Values are set via prefetching to ensure the
+// first request from the client has data available.
 const newsCache = { items: [], fetched: 0 };
 const tipsCache = { items: [], fetched: 0 };
 
-// Fetch latest news items.  In a production implementation this could call an external search API (e.g. Tavily) filtered
-// by NEWS_DOMAINS.  Here we return an empty list by default to ensure the endpoint always resolves.
+// Fetch latest news and tips via the respective modules.  These functions
+// wrap the imported getNews() and getTips() functions to provide
+// uniform error handling.  Should the provider throw an error, an empty
+// array is returned to avoid breaking the API.
 async function fetchNews() {
   try {
-    // TODO: implement fetch from external provider using process.env.TAVILY_API_KEY and NEWS_DOMAINS
-    return [];
-  } catch (e) {
-    console.error('[news] fetch failed', e);
+    const items = await getNews();
+    return Array.isArray(items) ? items : [];
+  } catch (err) {
+    console.error('[news] fetch failed', err);
     return [];
   }
 }
-
-// Fetch latest tips.  This could source from a curated database or summary service.  Defaults to empty.
 async function fetchTips() {
   try {
-    // TODO: implement fetch from external provider or file
-    return [];
-  } catch (e) {
-    console.error('[tips] fetch failed', e);
+    const items = await getTips();
+    return Array.isArray(items) ? items : [];
+  } catch (err) {
+    console.error('[tips] fetch failed', err);
     return [];
   }
 }
@@ -159,3 +167,43 @@ app.use('/_api', (req,res,next)=>{ req.url = req.originalUrl.replace(/^\/_api/, 
 app.use((_req,res)=> res.status(404).json({ ok:false, error:'not_found' }));
 
 app.listen(PORT, ()=> console.log(`[hohl.rocks-back] :${PORT}`));
+
+// ---------------------------------------------------------------------------
+// Prefetch news and tips on startup and periodically thereafter.  This
+// ensures that the first visitor to the site sees populated lists instead
+// of empty placeholders.  The interval is based on the larger of the
+// NEWS_TTL_HOURS and TIPS_TTL_HOURS environment variables.  If neither
+// variable is set the default of 24 hours is used.
+
+async function prefetchAll() {
+  try {
+    const items = await fetchNews();
+    if (Array.isArray(items) && items.length) {
+      newsCache.items = items;
+      newsCache.fetched = Date.now();
+      console.log('[Prefetch] Loaded', items.length, 'news items');
+    }
+  } catch (err) {
+    console.error('[Prefetch] News prefetch error', err);
+  }
+  try {
+    const items = await fetchTips();
+    if (Array.isArray(items) && items.length) {
+      tipsCache.items = items;
+      tipsCache.fetched = Date.now();
+      console.log('[Prefetch] Loaded', items.length, 'tips');
+    }
+  } catch (err) {
+    console.error('[Prefetch] Tips prefetch error', err);
+  }
+}
+// Kick off prefetch once immediately when the server starts
+prefetchAll().catch(err => console.error('[Prefetch] Startup error', err));
+// Determine a reasonable interval based on configured TTLs
+const newsTTL = parseInt(process.env.NEWS_TTL_HOURS, 10) || 24;
+const tipsTTL = parseInt(process.env.TIPS_TTL_HOURS, 10) || 24;
+const intervalHours = Math.max(newsTTL, tipsTTL);
+// Schedule periodic prefetching.  Avoid extremely short intervals.
+setInterval(() => {
+  prefetchAll().catch(err => console.error('[Prefetch] Scheduled error', err));
+}, Math.max(intervalHours, 1) * 60 * 60 * 1000);
