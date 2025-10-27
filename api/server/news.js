@@ -1,34 +1,22 @@
 // api/server/news.js
 //
-// This module provides a simple, cache‑backed news service for the hohl.rocks
-// API.  It exposes a `getNews()` function that returns a list of curated
-// news items.  The service uses a static data set to avoid any network
-// dependency during builds or runtime, but still supports caching so that
-// callers can benefit from stale‑while‑revalidate semantics if desired.
-//
-// News items follow the shape:
-// {
-//   id:        string,
-//   title:     string,
-//   url:       string,
-//   summary:   string,
-//   date:      ISO string,
-//   source:    string,
-//   priority:  number
-// }
+// Curated AI news provider for the hohl.rocks platform.  This module
+// exports a function that returns a sorted array of news items.  It
+// caches the results using the simple in‑memory cache helper.  The
+// NEWS_TTL_HOURS environment variable controls how long the cache is
+// retained (default: 24 hours).
 
-const cache = require('./cache');
+import { get as cacheGet, set as cacheSet } from './cache.js';
 
-// Cache key and TTL.  Use the NEWS_TTL_HOURS environment variable if set,
-// otherwise default to 24 hours.  TTL is converted from hours to
-// milliseconds for the cache helper.
+// Cache key and TTL.  Convert hours to milliseconds.  If the
+// environment variable cannot be parsed, default to 24 hours.
 const CACHE_KEY = 'news:all';
 const TTL_MS = (parseInt(process.env.NEWS_TTL_HOURS, 10) || 24) * 60 * 60 * 1000;
 
-// A curated list of news items.  These entries can be adjusted over time to
-// reflect the latest developments in AI, regulation and industry trends.
-// Titles and summaries should be concise and informative.  The `date`
-// field should reflect the ISO timestamp for ordering and freshness.
+// Static list of curated news items.  New items can be added here
+// without affecting consumer code.  Each entry includes a priority for
+// sorting (descending) and a date for tiebreakers.  The date defaults
+// to now so that items appear fresh when first deployed.
 const staticNews = [
   {
     id: 'eu-ai-act-final',
@@ -78,34 +66,26 @@ const staticNews = [
 ];
 
 /**
- * Returns a sorted list of news items.  Results are cached for the
- * configured TTL; subsequent calls will return the cached list until
- * expiration.  The list is sorted by priority (descending) and then by
- * publication date (newest first).
+ * Retrieve a list of news items.  Results are cached according to
+ * NEWS_TTL_HOURS to avoid unnecessary work on each request.  When the
+ * cache is empty or stale the static list is sorted by priority and
+ * date, cached and returned.
  *
- * @returns {Promise<Array>} Array of news items
+ * @returns {Promise<Array>} Promise resolving to an array of news items
  */
-async function getNews() {
-  try {
-    const cached = cache.get(CACHE_KEY);
-    if (cached) {
-      return cached;
+export async function getNews() {
+  const cached = cacheGet(CACHE_KEY);
+  if (cached) return cached;
+  // Sort by priority (descending) then by date (newest first)
+  const sorted = staticNews.slice().sort((a, b) => {
+    if ((b.priority || 0) !== (a.priority || 0)) {
+      return (b.priority || 0) - (a.priority || 0);
     }
-    // Sort by priority descending, then by date (newest first)
-    const sorted = staticNews
-      .slice() // copy to avoid mutating original
-      .sort((a, b) => {
-        if ((b.priority || 0) !== (a.priority || 0)) {
-          return (b.priority || 0) - (a.priority || 0);
-        }
-        return new Date(b.date) - new Date(a.date);
-      });
-    cache.set(CACHE_KEY, sorted, TTL_MS);
-    return sorted;
-  } catch (err) {
-    console.error('[news] getNews error', err);
-    return staticNews;
-  }
+    return new Date(b.date) - new Date(a.date);
+  });
+  cacheSet(CACHE_KEY, sorted, TTL_MS);
+  return sorted;
 }
 
-module.exports = { getNews, staticNews };
+// Also export the static list for potential inspection or testing.
+export { staticNews };

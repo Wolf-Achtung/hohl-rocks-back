@@ -1,22 +1,21 @@
 // api/server/tips.js
 //
-// Provides a static collection of curated KI‑Tipps along with a helper to
-// retrieve them.  Each tip contains basic metadata and a priority used
-// to sort the list.  The list is cached for a configurable duration so
-// that clients can rely on stable responses between refreshes.
+// Curated KI‑Tipps provider for the hohl.rocks platform.  This module
+// exports a function that returns a sorted array of tip objects.  It
+// caches the result based on a TTL to avoid recomputing rankings on
+// every request.  The TIPS_TTL_HOURS environment variable controls
+// cache duration (default: 24 hours).
 
-const cache = require('./cache');
+import { get as cacheGet, set as cacheSet } from './cache.js';
 
-// Cache key and TTL.  The TTL can be overridden via the TIPS_TTL_HOURS
-// environment variable.  Defaults to one day (24 hours).
+// Cache key and TTL in milliseconds.  Defaults to 24 hours.
 const CACHE_KEY = 'tips:all';
 const TTL_MS = (parseInt(process.env.TIPS_TTL_HOURS, 10) || 24) * 60 * 60 * 1000;
 
-// Static tips curated for the hohl.rocks platform.  These entries cover
-// topics ranging from Prompt Engineering and LLM efficiency to
-// DSGVO‑konforme Nutzung von KI und Enterprise‑Architekturen wie
-// Retrieval‑Augmented Generation (RAG).  Additional entries can be
-// appended as needed.
+// Static list of curated tips.  Each tip includes an id, title,
+// content/summary, category and priority.  The `url` field points to
+// the corresponding detail page served from the front‑end.  Dates are
+// generated dynamically on startup to reflect freshness.
 const staticTips = [
   {
     id: 'prompt-basics',
@@ -24,8 +23,6 @@ const staticTips = [
     content: 'Sei spezifisch und klar in deinen Prompts für bessere KI‑Antworten.',
     category: 'Praxis',
     why: 'Best Practice',
-    // Interner Pfad zum Tipp‑Detail.  Mit absoluten Pfaden vermeiden wir
-    // Probleme mit relativen Modulpfaden, wenn die Seite unter /tips/... geladen wird.
     url: '/tips/prompt-basics.html',
     tags: ['AI', 'Prompting', 'Basics'],
     date: new Date().toISOString(),
@@ -155,65 +152,43 @@ const staticTips = [
 ];
 
 /**
- * Retrieve the sorted list of tips.  Results are cached for the TTL; on a
- * cache miss the static data is sorted and stored.  Sorting is by
- * priority (descending) then by date (newest first).  An enriched
- * response is returned containing a rank and source for each tip.
+ * Retrieve a list of tips.  Items are sorted by priority (descending) then
+ * by date (newest first) and cached for the configured TTL.  If the
+ * cache entry exists and is valid it is returned immediately.
  *
- * @returns {Promise<Array>} array of tip objects
+ * @returns {Promise<Array>} Promise resolving to an array of tips
  */
-async function getTips() {
-  try {
-    const cached = cache.get(CACHE_KEY);
-    if (cached) {
-      return cached;
+export async function getTips() {
+  const cached = cacheGet(CACHE_KEY);
+  if (cached) return cached;
+  const sorted = staticTips.slice().sort((a, b) => {
+    if ((b.priority || 0) !== (a.priority || 0)) {
+      return (b.priority || 0) - (a.priority || 0);
     }
-    const sorted = staticTips
-      .slice()
-      .sort((a, b) => {
-        if ((b.priority || 0) !== (a.priority || 0)) {
-          return (b.priority || 0) - (a.priority || 0);
-        }
-        return new Date(b.date) - new Date(a.date);
-      });
-    // Enrich with rank and source
-    const enriched = sorted.map((tip, idx) => ({
-      ...tip,
-      rank: idx + 1,
-      source: 'static'
-    }));
-    cache.set(CACHE_KEY, enriched, TTL_MS);
-    return enriched;
-  } catch (err) {
-    console.error('[tips] getTips error', err);
-    // On error return unsorted static list
-    return staticTips;
-  }
+    return new Date(b.date) - new Date(a.date);
+  });
+  // Enrich with rank and source to facilitate front‑end display
+  const enriched = sorted.map((tip, idx) => ({ ...tip, rank: idx + 1, source: 'static' }));
+  cacheSet(CACHE_KEY, enriched, TTL_MS);
+  return enriched;
 }
 
-// Convenience filters (category/tag) not used by API directly but exported
-function getTipById(id) {
-  return staticTips.find(t => t.id === id);
+// Additional convenience exports for filtering (not used yet in API)
+export function getTipById(id) {
+  return staticTips.find(t => String(t.id) === String(id));
 }
-function getTipsByCategory(category) {
-  return staticTips.filter(t => t.category === category);
+export function getTipsByCategory(cat) {
+  return staticTips.filter(t => t.category === cat);
 }
-function getTipsByTag(tag) {
-  return staticTips.filter(t => t.tags && t.tags.includes(tag));
+export function getTipsByTag(tag) {
+  return staticTips.filter(t => (t.tags || []).includes(tag));
 }
-function getAllCategories() {
+export function getAllCategories() {
   return [...new Set(staticTips.map(t => t.category))];
 }
-function getAllTags() {
+export function getAllTags() {
   return [...new Set(staticTips.flatMap(t => t.tags || []))];
 }
 
-module.exports = {
-  getTips,
-  staticTips,
-  getTipById,
-  getTipsByCategory,
-  getTipsByTag,
-  getAllCategories,
-  getAllTags
-};
+// Export the static list as well
+export { staticTips };
