@@ -198,6 +198,23 @@ app.get('/api/news', async (req, res) => {
   res.json({ items: newsCache.items || [] });
 });
 
+// Search for news dynamically via configured external providers.
+// Clients may supply a query string parameter `q` or `query`.
+// Results come from Tavily or Perplexity and are returned unsorted.
+app.get('/api/news/search', async (req, res) => {
+  const q = String(req.query?.q || req.query?.query || '').trim();
+  if (!q) return res.status(400).json({ ok: false, error: 'missing_query' });
+  try {
+    // Import search function lazily to avoid circular dependencies.
+    const { searchNews } = await import('./news.js');
+    const items = await searchNews(q);
+    res.json({ items: Array.isArray(items) ? items : [] });
+  } catch (err) {
+    console.error('[news/search] search failed', err);
+    res.status(500).json({ ok: false, error: 'search_failed' });
+  }
+});
+
 app.get('/api/tips', async (req, res) => {
   const ttlHours = parseInt(process.env.TIPS_TTL_HOURS || '24', 10);
   if (!Array.isArray(tipsCache.items) || (Date.now() - tipsCache.fetched) > ttlHours * 3600 * 1000) {
