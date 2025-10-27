@@ -24,7 +24,9 @@ const staticTips = [
     content: 'Sei spezifisch und klar in deinen Prompts für bessere KI‑Antworten.',
     category: 'Praxis',
     why: 'Best Practice',
-    url: 'https://hohl.rocks/tips/prompt-engineering',
+    // Interner Pfad zum Tipp‑Detail.  Mit absoluten Pfaden vermeiden wir
+    // Probleme mit relativen Modulpfaden, wenn die Seite unter /tips/... geladen wird.
+    url: '/tips/prompt-basics.html',
     tags: ['AI', 'Prompting', 'Basics'],
     date: new Date().toISOString(),
     priority: 10
@@ -35,7 +37,7 @@ const staticTips = [
     content: 'Strukturierte Prompts mit klaren Anweisungen, Beispielen und Qualitätskriterien führen zu deutlich besseren Ergebnissen.',
     category: 'Effizienz',
     why: 'AI Excellence',
-    url: 'https://hohl.rocks/tips/claude-best-practices',
+    url: '/tips/claude-sonnet-best.html',
     tags: ['AI', 'Claude', 'Advanced'],
     date: new Date().toISOString(),
     priority: 9
@@ -46,7 +48,7 @@ const staticTips = [
     content: 'Nutze den H.264‑Codec mit adaptivem Streaming für die beste Web‑Kompatibilität und Performance.',
     category: 'Performance',
     why: 'Performance',
-    url: 'https://hohl.rocks/tips/video-optimization',
+    url: '/tips/video-optimization.html',
     tags: ['Video', 'Performance', 'Web'],
     date: new Date().toISOString(),
     priority: 8
@@ -57,7 +59,7 @@ const staticTips = [
     content: 'Datensparsamkeit, Pseudonymisierung und sorgfältige Anbieterwahl sind die wichtigsten Datenschutzaspekte beim Einsatz von KI.',
     category: 'Rechtssicherheit',
     why: 'Compliance',
-    url: 'https://hohl.rocks/tips/dsgvo-ki',
+    url: '/tips/dsq-ki.html',
     tags: ['DSGVO', 'Compliance', 'AI'],
     date: new Date().toISOString(),
     priority: 7
@@ -68,7 +70,7 @@ const staticTips = [
     content: 'Die wichtigsten Regelungen des EU AI Act für Unternehmen: Risikostufen, Transparenzpflichten und Dokumentationsanforderungen.',
     category: 'Compliance',
     why: 'Regulation',
-    url: 'https://hohl.rocks/tips/eu-ai-act',
+    url: '/tips/eu-ai-act.html',
     tags: ['EU', 'Regulation', 'Compliance'],
     date: new Date().toISOString(),
     priority: 7
@@ -79,7 +81,7 @@ const staticTips = [
     content: 'Verstehe und optimiere die Nutzung von Context Windows in großen Sprachmodellen.',
     category: 'Technical',
     why: 'Optimization',
-    url: 'https://hohl.rocks/tips/context-windows',
+    url: '/tips/context-windows.html',
     tags: ['AI', 'Technical', 'Optimization'],
     date: new Date().toISOString(),
     priority: 6
@@ -90,7 +92,7 @@ const staticTips = [
     content: 'Retrieval‑Augmented Generation: So baust du KI‑Systeme mit eigenem Wissen.',
     category: 'Architecture',
     why: 'Enterprise AI',
-    url: 'https://hohl.rocks/tips/rag-systems',
+    url: '/tips/rag-systems.html',
     tags: ['AI', 'RAG', 'Enterprise'],
     date: new Date().toISOString(),
     priority: 6
@@ -101,7 +103,7 @@ const staticTips = [
     content: 'Spare bis zu 80 % Kosten durch intelligente Token‑Nutzung in KI‑Anwendungen.',
     category: 'Cost',
     why: 'Efficiency',
-    url: 'https://hohl.rocks/tips/token-optimization',
+    url: '/tips/token-optimization.html',
     tags: ['AI', 'Cost', 'Optimization'],
     date: new Date().toISOString(),
     priority: 5
@@ -112,7 +114,7 @@ const staticTips = [
     content: 'Implementiere Echtzeit‑Streaming für sofortiges Feedback in KI‑Anwendungen.',
     category: 'UX',
     why: 'User Experience',
-    url: 'https://hohl.rocks/tips/streaming-responses',
+    url: '/tips/streaming-responses.html',
     tags: ['AI', 'UX', 'Streaming'],
     date: new Date().toISOString(),
     priority: 5
@@ -123,7 +125,7 @@ const staticTips = [
     content: 'Wie du mit perfekten System‑Prompts die KI‑Ausgaben präzise steuerst.',
     category: 'Prompting',
     why: 'Control',
-    url: 'https://hohl.rocks/tips/system-prompts',
+    url: '/tips/system-prompts.html',
     tags: ['AI', 'Prompting', 'Advanced'],
     date: new Date().toISOString(),
     priority: 8
@@ -134,7 +136,7 @@ const staticTips = [
     content: 'Baue robuste KI‑Systeme mit intelligenten Fallback‑Mechanismen.',
     category: 'Reliability',
     why: 'Production',
-    url: 'https://hohl.rocks/tips/fallback-chains',
+    url: '/tips/fallback-chains.html',
     tags: ['AI', 'Architecture', 'Reliability'],
     date: new Date().toISOString(),
     priority: 6
@@ -145,7 +147,7 @@ const staticTips = [
     content: 'Best Practices für fehlertolerante KI‑Anwendungen.',
     category: 'Development',
     why: 'Robustness',
-    url: 'https://hohl.rocks/tips/error-handling',
+    url: '/tips/error-handling.html',
     tags: ['AI', 'Development', 'Best Practice'],
     date: new Date().toISOString(),
     priority: 5
