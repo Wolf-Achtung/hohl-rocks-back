@@ -1,8 +1,3 @@
-# ✅ `server.js` (vollständig, aktualisiert)
-- Registriert **optional** die Spark-Route, falls `api/server/services/spark.route.js` vorhanden ist (keine harte Abhängigkeit – sauberer Fallback).
-- Keine Änderungen am bestehenden Verhalten; News/Tips/Run/Stream bleiben unverändert.
-
-```js
 // api/server/server.js
 import express from 'express';
 import cors from 'cors';
@@ -14,85 +9,40 @@ import { TOP_PROMPTS } from './prompts.js';
 import { getNews } from './news.js';
 import { getTips } from './tips.js';
 
-// In-memory caches for news and tips.  Each cache stores the items
-// array and the timestamp when it was last refreshed.  These caches
-// prevent expensive refreshes on every request and enable a
-// stale-while-revalidate strategy.  Prefetching on startup warms the
-// caches so the first user sees content immediately.
+// In-memory caches
 const newsCache = { items: [], fetched: 0 };
 const tipsCache = { items: [], fetched: 0 };
 
-// Helpers to fetch curated news and tips.  If the underlying
-// providers throw an error (e.g. network or parsing issues) an empty
-// array is returned to avoid breaking the API.  You can augment
-// getNews()/getTips() to call external feeds; here they return
-// statically curated content stored in news.js and tips.js.
 async function fetchNews() {
-  try {
-    const items = await getNews();
-    return Array.isArray(items) ? items : [];
-  } catch (err) {
-    console.error('[news] fetch failed', err);
-    return [];
-  }
+  try { const items = await getNews(); return Array.isArray(items) ? items : []; }
+  catch (err) { console.error('[news] fetch failed', err); return []; }
 }
 async function fetchTips() {
-  try {
-    const items = await getTips();
-    return Array.isArray(items) ? items : [];
-  } catch (err) {
-    console.error('[tips] fetch failed', err);
-    return [];
-  }
+  try { const items = await getTips(); return Array.isArray(items) ? items : []; }
+  catch (err) { console.error('[tips] fetch failed', err); return []; }
 }
 
-// -----------------------------------------------------------------------------
-// Replicate helper functions.  These functions interface with the Replicate
-// API to perform image generation, image analysis and music synthesis.  They
-// poll the prediction endpoint until the status becomes `succeeded` or
-// terminates on failure.  See https://replicate.com/docs/reference/http
-
-/**
- * Create a new Replicate prediction and wait until it completes.
- *
- * @param {string} version The model version identifier (e.g. "black-forest-labs/flux-1.1-pro")
- * @param {Object} input The input object as required by the model
- * @returns {Promise<Object>} The prediction object when finished
- */
+// -------- Replicate helpers (image, analyze, music) --------
 async function runReplicate(version, input) {
   const token = process.env.REPLICATE_API_TOKEN;
   if (!token) throw new Error('replicate_token_missing');
   const create = await fetch('https://api.replicate.com/v1/predictions', {
     method: 'POST',
-    headers: {
-      'Authorization': `Token ${token}`,
-      'Content-Type': 'application/json'
-    },
+    headers: { 'Authorization': `Token ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ version, input })
   });
   if (!create.ok) throw new Error('replicate_create_failed');
   const prediction = await create.json();
   const statusUrl = prediction?.urls?.get;
   if (!statusUrl) return prediction;
-  let status = prediction.status;
-  let result = prediction;
-  // Poll every 2 seconds until the prediction completes
+  let status = prediction.status, result = prediction;
   while (status !== 'succeeded' && status !== 'failed' && status !== 'canceled') {
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    const res = await fetch(statusUrl, {
-      headers: { 'Authorization': `Token ${token}` }
-    });
-    result = await res.json();
-    status = result.status;
+    await new Promise(r => setTimeout(r, 2000));
+    const res = await fetch(statusUrl, { headers: { 'Authorization': `Token ${token}` } });
+    result = await res.json(); status = result.status;
   }
   return result;
 }
-
-/**
- * Generate an image using the configured Replicate model.  Returns the URL
- * of the first output image or null on failure.
- * @param {string} prompt Description of the desired image
- */
 async function generateImage(prompt) {
   const version = process.env.REPLICATE_MODEL_VERSION || 'black-forest-labs/flux-1.1-pro';
   const prediction = await runReplicate(version, { prompt });
@@ -101,29 +51,14 @@ async function generateImage(prompt) {
   if (typeof output === 'string') return output;
   return null;
 }
-
-/**
- * Analyze an image via the LLaVA model.  Expects a base64 encoded image
- * string (without data URI prefix).  Returns the description text.
- * @param {string} imageData Base64 encoded image
- */
 async function analyzeImage(imageData) {
   const version = process.env.REPLICATE_LLAVA_VERSION || 'liuhaotian/llava-13b';
-  // LLaVA expects an image URL or base64 data.  Use the base64 string
-  // directly and rely on Replicate to handle it.  The model may also
-  // support additional parameters (e.g. prompt) but we omit them here.
   const prediction = await runReplicate(version, { image: imageData });
   const output = prediction?.output;
   if (Array.isArray(output) && output.length > 0) return String(output[0]);
   if (typeof output === 'string') return output;
   return 'Keine Beschreibung.';
 }
-
-/**
- * Generate a short music clip using the MusicGen model.  Returns the URL
- * of the generated audio file or null.
- * @param {string} prompt Description of the desired mood or scene
- */
 async function generateMusic(prompt) {
   const version = process.env.REPLICATE_MUSICGEN_VERSION || 'facebook/musicgen';
   const prediction = await runReplicate(version, { prompt });
@@ -155,8 +90,6 @@ app.get('/healthz', (_req, res) => res.json({ ok: true }));
 app.get('/readyz', (_req, res) => res.json({ ok: !!process.env.TAVILY_API_KEY }));
 
 // ---------- Optional: Today’s Spark Route registrieren ----------
-// Lädt die Route nur, wenn `api/server/services/spark.route.js` vorhanden ist.
-// Kein harter Fehler, falls die Datei noch nicht eingecheckt wurde.
 (async () => {
   try {
     const mod = await import('./services/spark.route.js');
@@ -167,14 +100,13 @@ app.get('/readyz', (_req, res) => res.json({ ok: !!process.env.TAVILY_API_KEY })
     } else {
       console.log('[spark] register() not found – skipping');
     }
-  } catch (e) {
+  } catch {
     console.log('[spark] optional route not installed – skipping');
   }
 })();
 
 // ---------- Helpers for Bubble Prompts ----------
 function parseBubbleEnvelope(input){
-  // Format: [Bubble <id> | <iso>]\n{ "payload": {...}, "thread": [...] }
   const m = input.match(/^\[Bubble\s+(\d+)\s*\|[^\]]*\]\s*([\s\S]*)$/);
   if (!m) return null;
   const id = parseInt(m[1], 10);
@@ -207,7 +139,7 @@ function buildUserPromptFromBubble(envelope){
 }
 
 // ------------- NEWS/TIPS endpoints -------------
-app.get('/api/news', async (req, res) => {
+app.get('/api/news', async (_req, res) => {
   const ttlHours = parseInt(process.env.NEWS_TTL_HOURS || '24', 10);
   if (!Array.isArray(newsCache.items) || (Date.now() - newsCache.fetched) > ttlHours * 3600 * 1000) {
     newsCache.items = await fetchNews();
@@ -229,7 +161,7 @@ app.get('/api/news/search', async (req, res) => {
   }
 });
 
-app.get('/api/tips', async (req, res) => {
+app.get('/api/tips', async (_req, res) => {
   const ttlHours = parseInt(process.env.TIPS_TTL_HOURS || '24', 10);
   if (!Array.isArray(tipsCache.items) || (Date.now() - tipsCache.fetched) > ttlHours * 3600 * 1000) {
     tipsCache.items = await fetchTips();
@@ -390,37 +322,25 @@ app.use((_req,res)=> res.status(404).json({ ok:false, error:'not_found' }));
 
 app.listen(PORT, ()=> console.log(`[hohl.rocks-back] :${PORT}`));
 
-// ---------------------------------------------------------------------------
-// Prefetch news and tips at startup and on a periodic interval.
-
+// Prefetch
 async function prefetchAll() {
   try {
     const items = await fetchNews();
     if (Array.isArray(items) && items.length) {
-      newsCache.items = items;
-      newsCache.fetched = Date.now();
+      newsCache.items = items; newsCache.fetched = Date.now();
       console.log('[Prefetch] Loaded', items.length, 'news items');
     }
-  } catch (err) {
-    console.error('[Prefetch] News prefetch error', err);
-  }
+  } catch (err) { console.error('[Prefetch] News prefetch error', err); }
   try {
     const items = await fetchTips();
     if (Array.isArray(items) && items.length) {
-      tipsCache.items = items;
-      tipsCache.fetched = Date.now();
+      tipsCache.items = items; tipsCache.fetched = Date.now();
       console.log('[Prefetch] Loaded', items.length, 'tips');
     }
-  } catch (err) {
-    console.error('[Prefetch] Tips prefetch error', err);
-  }
+  } catch (err) { console.error('[Prefetch] Tips prefetch error', err); }
 }
-
 prefetchAll().catch(err => console.error('[Prefetch] Startup error', err));
-
 const newsTTL = parseInt(process.env.NEWS_TTL_HOURS, 10) || 24;
 const tipsTTL = parseInt(process.env.TIPS_TTL_HOURS, 10) || 24;
 const intervalHours = Math.max(newsTTL, tipsTTL);
-setInterval(() => {
-  prefetchAll().catch(err => console.error('[Prefetch] Scheduled error', err));
-}, Math.max(intervalHours, 1) * 60 * 60 * 1000);
+setInterval(() => { prefetchAll().catch(err => console.error('[Prefetch] Scheduled error', err)); }, Math.max(intervalHours, 1) * 60 * 60 * 1000);
