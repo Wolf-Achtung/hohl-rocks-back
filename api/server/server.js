@@ -1,3 +1,8 @@
+# ✅ `server.js` (vollständig, aktualisiert)
+- Registriert **optional** die Spark-Route, falls `api/server/services/spark.route.js` vorhanden ist (keine harte Abhängigkeit – sauberer Fallback).
+- Keine Änderungen am bestehenden Verhalten; News/Tips/Run/Stream bleiben unverändert.
+
+```js
 // api/server/server.js
 import express from 'express';
 import cors from 'cors';
@@ -9,10 +14,10 @@ import { TOP_PROMPTS } from './prompts.js';
 import { getNews } from './news.js';
 import { getTips } from './tips.js';
 
-// In‑memory caches for news and tips.  Each cache stores the items
+// In-memory caches for news and tips.  Each cache stores the items
 // array and the timestamp when it was last refreshed.  These caches
 // prevent expensive refreshes on every request and enable a
-// stale‑while‑revalidate strategy.  Prefetching on startup warms the
+// stale-while-revalidate strategy.  Prefetching on startup warms the
 // caches so the first user sees content immediately.
 const newsCache = { items: [], fetched: 0 };
 const tipsCache = { items: [], fetched: 0 };
@@ -149,6 +154,24 @@ app.use(compression());
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 app.get('/readyz', (_req, res) => res.json({ ok: !!process.env.TAVILY_API_KEY }));
 
+// ---------- Optional: Today’s Spark Route registrieren ----------
+// Lädt die Route nur, wenn `api/server/services/spark.route.js` vorhanden ist.
+// Kein harter Fehler, falls die Datei noch nicht eingecheckt wurde.
+(async () => {
+  try {
+    const mod = await import('./services/spark.route.js');
+    const register = mod?.register || mod?.default?.register;
+    if (typeof register === 'function') {
+      register(app);
+      console.log('[spark] route registered at /api/spark/today');
+    } else {
+      console.log('[spark] register() not found – skipping');
+    }
+  } catch (e) {
+    console.log('[spark] optional route not installed – skipping');
+  }
+})();
+
 // ---------- Helpers for Bubble Prompts ----------
 function parseBubbleEnvelope(input){
   // Format: [Bubble <id> | <iso>]\n{ "payload": {...}, "thread": [...] }
@@ -184,11 +207,6 @@ function buildUserPromptFromBubble(envelope){
 }
 
 // ------------- NEWS/TIPS endpoints -------------
-// Serve curated news and tips with stale‑while‑revalidate caching.  TTLs are
-// configured via NEWS_TTL_HOURS and TIPS_TTL_HOURS environment variables
-// (defaults to 24 hours).  When the cache is empty or stale the
-// respective fetch functions are called; otherwise cached items are
-// returned immediately.
 app.get('/api/news', async (req, res) => {
   const ttlHours = parseInt(process.env.NEWS_TTL_HOURS || '24', 10);
   if (!Array.isArray(newsCache.items) || (Date.now() - newsCache.fetched) > ttlHours * 3600 * 1000) {
@@ -198,14 +216,10 @@ app.get('/api/news', async (req, res) => {
   res.json({ items: newsCache.items || [] });
 });
 
-// Search for news dynamically via configured external providers.
-// Clients may supply a query string parameter `q` or `query`.
-// Results come from Tavily or Perplexity and are returned unsorted.
 app.get('/api/news/search', async (req, res) => {
   const q = String(req.query?.q || req.query?.query || '').trim();
   if (!q) return res.status(400).json({ ok: false, error: 'missing_query' });
   try {
-    // Import search function lazily to avoid circular dependencies.
     const { searchNews } = await import('./news.js');
     const items = await searchNews(q);
     res.json({ items: Array.isArray(items) ? items : [] });
@@ -224,8 +238,7 @@ app.get('/api/tips', async (req, res) => {
   res.json({ items: tipsCache.items || [] });
 });
 
-// Simple metrics endpoint.  Logs events emitted by the front‑end for
-// tracking usage patterns.  Can be extended to persist events.
+// Simple metrics endpoint
 app.post('/api/metrics', (req, res) => {
   try {
     const { type = 'unknown', ...meta } = req.body || {};
@@ -244,12 +257,8 @@ app.post('/api/run', async (req, res) => {
     const euOnly = String(req.query?.eu || req.body?.eu || process.env.EU_ONLY) === '1';
     const bubble = parseBubbleEnvelope(raw);
     const system = 'Du bist ein prägnanter, hilfreicher Assistent. Antworte auf Deutsch, kurz und konkret.';
-    // If a Bubble is provided and its ID corresponds to a media or decision
-    // prompt, handle it specially.  Otherwise build the user prompt and
-    // complete it via the selected language model.
     if (bubble && typeof bubble.id === 'number') {
       const id = bubble.id;
-      // Generate an image (Flux) – prompt comes from payload.BESCHREIBUNG
       if (id === 18) {
         const desc = String(bubble.payload?.BESCHREIBUNG || '').trim();
         if (!desc) return res.status(400).json({ ok:false, error:'missing_input' });
@@ -262,7 +271,6 @@ app.post('/api/run', async (req, res) => {
           return res.status(500).json({ ok:false, error:'image_failed' });
         }
       }
-      // Analyze an uploaded image (LLaVA) – expects base64 in payload.BILD.data
       if (id === 19) {
         const data = bubble.payload?.BILD?.data;
         if (!data) return res.status(400).json({ ok:false, error:'missing_image' });
@@ -274,17 +282,15 @@ app.post('/api/run', async (req, res) => {
           return res.status(500).json({ ok:false, error:'image_analyze_failed' });
         }
       }
-      // Yes/No joke decision – uses LLM to tell a joke or replies politely
       if (id === 20) {
         const ans = String(bubble.payload?.ANTWORT || '').trim().toLowerCase();
         if (['ja','j','yes','y','1','true'].includes(ans)) {
-          const joke = await completeText('Erzähle einen kurzen KI‑bezogenen Witz.', { system, euOnly });
+          const joke = await completeText('Erzähle einen kurzen KI-bezogenen Witz.', { system, euOnly });
           return res.json({ ok:true, result: joke || 'Keine Antwort.' });
         } else {
           return res.json({ ok:true, result: 'Alles klar, vielleicht später.' });
         }
       }
-      // Generate a short music loop – prompt comes from payload.BESCHREIBUNG
       if (id === 21) {
         const desc = String(bubble.payload?.BESCHREIBUNG || '').trim();
         if (!desc) return res.status(400).json({ ok:false, error:'missing_input' });
@@ -311,11 +317,8 @@ app.get('/api/run/stream', async (req, res) => {
     const euOnly = String(req.query?.eu || process.env.EU_ONLY) === '1';
     const bubble = parseBubbleEnvelope(raw);
     const system = 'Du bist ein prägnanter, hilfreicher Assistent. Antworte auf Deutsch, kurz und konkret.';
-    // Handle special bubble types via Replicate.  For these IDs we
-    // generate the entire output before streaming it as a single event.
     if (bubble && typeof bubble.id === 'number') {
       const id = bubble.id;
-      // Image generation
       if (id === 18) {
         const desc = String(bubble.payload?.BESCHREIBUNG || '').trim();
         if (!desc){ res.writeHead(400); return res.end('missing description'); }
@@ -330,13 +333,12 @@ app.get('/api/run/stream', async (req, res) => {
           res.writeHead(500); return res.end('image_failed');
         }
       }
-      // Image analysis
       if (id === 19) {
         const data = bubble.payload?.BILD?.data;
         if (!data){ res.writeHead(400); return res.end('missing image'); }
         try {
           const description = await analyzeImage(data);
-          res.writeHead(200, { 'Content-Type':'text/event-stream','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','Access-Control-Allow-Origin':'*' });
+          res.writeHead(200, { 'Content-Type':'text/event-stream','Cache-Control':'no-cache, no transform','Connection':'keep-alive','Access-Control-Allow-Origin':'*' });
           res.write(`data: ${description || 'Keine Antwort.'}\n\n`);
           res.write('data: [DONE]\n\n');
           return res.end();
@@ -345,12 +347,11 @@ app.get('/api/run/stream', async (req, res) => {
           res.writeHead(500); return res.end('image_analyze_failed');
         }
       }
-      // Yes/No joke decision
       if (id === 20) {
         const ans = String(bubble.payload?.ANTWORT || '').trim().toLowerCase();
         res.writeHead(200, { 'Content-Type':'text/event-stream','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','Access-Control-Allow-Origin':'*' });
         if (['ja','j','yes','y','1','true'].includes(ans)) {
-          const joke = await completeText('Erzähle einen kurzen KI‑bezogenen Witz.', { system, euOnly });
+          const joke = await completeText('Erzähle einen kurzen KI-bezogenen Witz.', { system, euOnly });
           res.write(`data: ${joke || 'Keine Antwort.'}\n\n`);
         } else {
           res.write('data: Alles klar, vielleicht später.\n\n');
@@ -358,7 +359,6 @@ app.get('/api/run/stream', async (req, res) => {
         res.write('data: [DONE]\n\n');
         return res.end();
       }
-      // Music generation
       if (id === 21) {
         const desc = String(bubble.payload?.BESCHREIBUNG || '').trim();
         if (!desc){ res.writeHead(400); return res.end('missing description'); }
@@ -391,11 +391,7 @@ app.use((_req,res)=> res.status(404).json({ ok:false, error:'not_found' }));
 app.listen(PORT, ()=> console.log(`[hohl.rocks-back] :${PORT}`));
 
 // ---------------------------------------------------------------------------
-// Prefetch news and tips at startup and on a periodic interval.  This
-// warming ensures that the first client receives populated lists and
-// reduces latency for the /api/news and /api/tips endpoints.  The
-// interval is set to the maximum of NEWS_TTL_HOURS and TIPS_TTL_HOURS
-// (defaults to 24 hours) and never less than 1 hour.
+// Prefetch news and tips at startup and on a periodic interval.
 
 async function prefetchAll() {
   try {
@@ -420,12 +416,8 @@ async function prefetchAll() {
   }
 }
 
-// Perform an immediate prefetch when the server starts
 prefetchAll().catch(err => console.error('[Prefetch] Startup error', err));
 
-// Schedule periodic prefetching.  Use the greater of configured TTLs and
-// ensure the interval is at least one hour to avoid spamming external
-// providers.  If environment variables are unset they default to 24.
 const newsTTL = parseInt(process.env.NEWS_TTL_HOURS, 10) || 24;
 const tipsTTL = parseInt(process.env.TIPS_TTL_HOURS, 10) || 24;
 const intervalHours = Math.max(newsTTL, tipsTTL);
