@@ -1,23 +1,21 @@
-# Use a stable Node base image.  We rely on the public AWS ECR mirror of official images to avoid rate limits
-FROM public.ecr.aws/docker/library/node:20-bookworm-slim
+# -*- coding: utf-8 -*-
+# Railway-ready Dockerfile for FastAPI backend (UTF-8 safe)
+FROM python:3.11-slim
 
-# Set working directory
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    LC_ALL=C.UTF-8 \
+    LANG=C.UTF-8 \
+    PYTHONUTF8=1
+
 WORKDIR /app
 
-# Install dependencies for the API.  Copy only package.json first to leverage layer caching
-COPY api/package.json ./api/package.json
-RUN set -ex \
-  && cd /app/api \
-  && npm install --omit=dev
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application source
-COPY api /app/api
+COPY server.py ./
 
-# Environment configuration
-ENV NODE_ENV=production PORT=8080
-
-# Expose the service port
-EXPOSE 8080
-
-# Run the server.  We avoid using a package manager here to keep the runtime lean.
-CMD ["node", "/app/api/server/server.js"]
+EXPOSE 8000
+# Railway supplies PORT; default to 8000 for local dev
+CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port ${PORT:-8000} --log-level ${LOG_LEVEL:-info}"]
