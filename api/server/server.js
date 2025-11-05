@@ -1,19 +1,33 @@
-// server.js - Minimales Backend für hohl.rocks
-// Deploy auf Railway: https://railway.app/
+// server.js - Backend für hohl.rocks (ES Module)
+import express from 'express';
+import cors from 'cors';
 
-const express = require('express');
-const cors = require('cors');
 const app = express();
 
 // Environment Variables
 const PORT = process.env.PORT || 3000;
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://hohl.rocks';
+const ALLOWED_ORIGINS = [
+  'https://hohl.rocks',
+  'https://www.hohl.rocks',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000'
+];
 
 // Middleware
 app.use(cors({ 
-  origin: [ALLOWED_ORIGIN, 'http://localhost:3000', 'http://127.0.0.1:3000'],
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) return callback(null, true);
+    if (ALLOWED_ORIGINS.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.log('[CORS] Blocked origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true 
 }));
+
 app.use(express.json());
 
 // Logging Middleware
@@ -22,13 +36,36 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health Check
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+// ==================== ROOT HEALTH CHECK ====================
+app.get('/', (req, res) => {
+  res.json({ 
+    status: 'ok',
+    message: 'hohl.rocks Backend API',
+    version: '1.0.0',
+    timestamp: new Date().toISOString(),
+    endpoints: [
+      'GET /health',
+      'GET /api/self',
+      'GET /api/spark/today',
+      'GET /api/news',
+      'GET /api/tips'
+    ]
+  });
 });
+
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
+// ==================== API ROUTES ====================
 
 // API: Self-Check
 app.get('/api/self', (req, res) => {
+  console.log('[API] /api/self called');
   res.json({
     ok: true,
     version: '1.0.0',
@@ -79,7 +116,7 @@ const sparkTips = [
 ];
 
 app.get('/api/spark/today', (req, res) => {
-  // Deterministischer Index basierend auf Datum
+  console.log('[API] /api/spark/today called');
   const today = new Date();
   const dayIndex = today.getDate() % sparkTips.length;
   const tip = sparkTips[dayIndex];
@@ -124,7 +161,7 @@ const newsItems = [
 ];
 
 app.get('/api/news', (req, res) => {
-  // Query-Parameter für Filterung
+  console.log('[API] /api/news called');
   const { limit = 10, source } = req.query;
   
   let filtered = newsItems;
@@ -173,6 +210,7 @@ const tips = [
 ];
 
 app.get('/api/tips', (req, res) => {
+  console.log('[API] /api/tips called');
   res.json({
     items: tips,
     total: tips.length,
@@ -180,18 +218,29 @@ app.get('/api/tips', (req, res) => {
   });
 });
 
+// ==================== ERROR HANDLERS ====================
+
 // 404 Handler
 app.use((req, res) => {
+  console.log('[404] Route not found:', req.method, req.path);
   res.status(404).json({
     error: 'not_found',
     message: `Route ${req.method} ${req.path} not found`,
+    availableEndpoints: [
+      'GET /',
+      'GET /health',
+      'GET /api/self',
+      'GET /api/spark/today',
+      'GET /api/news',
+      'GET /api/tips'
+    ],
     timestamp: new Date().toISOString()
   });
 });
 
 // Error Handler
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
+  console.error('[ERROR]', err);
   res.status(500).json({
     error: 'internal_server_error',
     message: err.message,
@@ -199,13 +248,14 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start Server
-app.listen(PORT, () => {
-  console.log('🚀 hohl.rocks Backend');
-  console.log(`📡 Listening on port ${PORT}`);
+// ==================== START SERVER ====================
+app.listen(PORT, '0.0.0.0', () => {
+  console.log('\n🚀 hohl.rocks Backend');
+  console.log(`📡 Listening on 0.0.0.0:${PORT}`);
   console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`✅ CORS enabled for: ${ALLOWED_ORIGIN}`);
+  console.log(`✅ CORS enabled for: ${ALLOWED_ORIGINS.join(', ')}`);
   console.log('\n📋 Available Endpoints:');
+  console.log('  GET  /');
   console.log('  GET  /health');
   console.log('  GET  /api/self');
   console.log('  GET  /api/spark/today');
@@ -217,5 +267,10 @@ app.listen(PORT, () => {
 // Graceful Shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down gracefully...');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received, shutting down gracefully...');
   process.exit(0);
 });
