@@ -77,7 +77,7 @@ function pickProvider({ provider, euOnly } = {}) {
 /**
  * LLM Completion - Generiert Text mit verfügbaren APIs
  */
-async function completeText(prompt, { system, provider, euOnly } = {}) {
+async function completeText(prompt, { system, provider, euOnly, maxTokens = 1000 } = {}) {
   const picked = pickProvider({ provider, euOnly });
   
   try {
@@ -113,9 +113,9 @@ async function completeText(prompt, { system, provider, euOnly } = {}) {
           'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
-          model: process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20241022',
+          model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
           system,
-          max_tokens: 1000,
+          max_tokens: maxTokens,
           messages: [{ role: 'user', content: prompt }]
         })
       });
@@ -163,7 +163,7 @@ app.get('/', (req, res) => {
   res.json({ 
     status: 'ok',
     message: 'hohl.rocks Backend API',
-    version: '2.0.0',
+    version: '2.1.0',
     timestamp: new Date().toISOString(),
     port: PORT,
     environment: NODE_ENV,
@@ -178,7 +178,8 @@ app.get('/', (req, res) => {
       'GET /api/spark/today',
       'GET /api/news',
       'GET /api/tips',
-      'POST /api/complete'
+      'POST /api/complete',
+      'POST /api/prompt-generator'
     ]
   });
 });
@@ -205,7 +206,7 @@ app.get('/api/self', (req, res) => {
   console.log('[API] /api/self called');
   res.status(200).json({
     ok: true,
-    version: '2.0.0',
+    version: '2.1.0',
     timestamp: new Date().toISOString(),
     ui: {
       modalShade: 0.6,
@@ -450,6 +451,191 @@ app.post('/api/complete', async (req, res) => {
   }
 });
 
+// ==================== PROMPT GENERATOR API ====================
+
+/**
+ * Live Prompt Generator - Generates 5 different prompt styles
+ */
+app.post('/api/prompt-generator', async (req, res) => {
+  console.log('[API] /api/prompt-generator called');
+  
+  const { topic } = req.body;
+  
+  // Validation
+  if (!topic || typeof topic !== 'string') {
+    return res.status(400).json({
+      error: 'missing_topic',
+      message: 'Topic is required and must be a string'
+    });
+  }
+  
+  const cleanTopic = topic.trim();
+  
+  if (cleanTopic.length < 3) {
+    return res.status(400).json({
+      error: 'topic_too_short',
+      message: 'Topic must be at least 3 characters'
+    });
+  }
+  
+  if (cleanTopic.length > 200) {
+    return res.status(400).json({
+      error: 'topic_too_long',
+      message: 'Topic must be max 200 characters'
+    });
+  }
+  
+  // Check if LLM is available
+  if (!hasAnthropic && !hasOpenAI) {
+    return res.status(503).json({
+      error: 'no_llm_available',
+      message: 'Keine LLM-APIs konfiguriert für Prompt-Generierung'
+    });
+  }
+  
+  try {
+    const systemPrompt = `Du bist ein Expert Prompt Engineer. 
+Deine Aufgabe ist es, für ein gegebenes Thema 5 verschiedene Prompt-Styles zu generieren.
+
+Die 5 Styles sind:
+1. EXECUTIVE: Business-fokussiert, strategisch, ROI-orientiert
+2. TECHNICAL: Entwickler-friendly, präzise, implementation-ready
+3. CREATIVE: Out-of-the-box, innovative Perspektiven, unkonventionell
+4. TUTORIAL: Step-by-step, pädagogisch, für Anfänger geeignet
+5. EXPERT: Deep-dive, fortgeschritten, nuanciert
+
+Jeder Prompt sollte:
+- 2-4 Sätze lang sein
+- Konkret und actionable
+- Den spezifischen Style widerspiegeln
+- Sofort verwendbar sein
+
+Antworte NUR mit einem JSON Array, ohne zusätzlichen Text:
+[
+  {
+    "name": "Executive",
+    "prompt": "...",
+    "description": "Business-strategische Perspektive"
+  },
+  {
+    "name": "Technical",
+    "prompt": "...",
+    "description": "Entwickler-fokussierte Analyse"
+  },
+  {
+    "name": "Creative",
+    "prompt": "...",
+    "description": "Innovative Perspektiven"
+  },
+  {
+    "name": "Tutorial",
+    "prompt": "...",
+    "description": "Pädagogischer Ansatz"
+  },
+  {
+    "name": "Expert",
+    "prompt": "...",
+    "description": "Deep-dive Analyse"
+  }
+]`;
+
+    const userPrompt = `Generiere 5 Prompt-Styles für das Thema: "${cleanTopic}"`;
+    
+    const result = await completeText(userPrompt, {
+      system: systemPrompt,
+      provider: hasAnthropic ? 'anthropic' : 'openai',
+      maxTokens: 2000
+    });
+    
+    if (!result) {
+      throw new Error('LLM returned empty result');
+    }
+    
+    // Parse JSON from result
+    let cleanedResult = result.trim();
+    
+    // Remove markdown code blocks if present
+    if (cleanedResult.includes('```json')) {
+      cleanedResult = cleanedResult.split('```json')[1].split('```')[0].trim();
+    } else if (cleanedResult.includes('```')) {
+      cleanedResult = cleanedResult.split('```')[1].split('```')[0].trim();
+    }
+    
+    let styles;
+    try {
+      styles = JSON.parse(cleanedResult);
+    } catch (parseError) {
+      console.error('[PROMPT-GEN] JSON Parse Error:', parseError);
+      // Fallback to static prompts
+      throw new Error('JSON parsing failed');
+    }
+    
+    // Add icons to styles
+    const iconMapping = {
+      'Executive': '💼',
+      'Technical': '⚙️',
+      'Creative': '🎨',
+      'Tutorial': '📚',
+      'Expert': '🎓'
+    };
+    
+    const enrichedStyles = styles.map(style => ({
+      ...style,
+      icon: iconMapping[style.name] || '✨'
+    }));
+    
+    res.json({
+      topic: cleanTopic,
+      styles: enrichedStyles,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('[PROMPT-GEN] Error:', error);
+    
+    // Fallback: Static prompts
+    const fallbackStyles = [
+      {
+        name: 'Executive',
+        prompt: `Analysiere ${cleanTopic} aus geschäftsstrategischer Sicht. Welche ROI-Potenziale, Marktchancen und Wettbewerbsvorteile ergeben sich?`,
+        description: 'Business-strategische Perspektive',
+        icon: '💼'
+      },
+      {
+        name: 'Technical',
+        prompt: `Erkläre die technische Implementation von ${cleanTopic}. Welche Technologien, APIs und Best Practices sind relevant?`,
+        description: 'Entwickler-fokussierte Analyse',
+        icon: '⚙️'
+      },
+      {
+        name: 'Creative',
+        prompt: `Betrachte ${cleanTopic} aus unkonventionellen Blickwinkeln. Welche überraschenden Anwendungen oder Kombinationen sind möglich?`,
+        description: 'Innovative Perspektiven',
+        icon: '🎨'
+      },
+      {
+        name: 'Tutorial',
+        prompt: `Erstelle eine Schritt-für-Schritt Anleitung zu ${cleanTopic}. Wie kann ein Anfänger damit starten?`,
+        description: 'Pädagogischer Ansatz',
+        icon: '📚'
+      },
+      {
+        name: 'Expert',
+        prompt: `Analysiere ${cleanTopic} auf Expertenniveau. Welche subtilen Nuancen, fortgeschrittenen Patterns und Edge Cases gibt es?`,
+        description: 'Deep-dive Analyse',
+        icon: '🎓'
+      }
+    ];
+    
+    res.json({
+      topic: cleanTopic,
+      styles: fallbackStyles,
+      timestamp: new Date().toISOString(),
+      fallback: true
+    });
+  }
+});
+
 // ==================== ERROR HANDLERS ====================
 
 // 404 Handler
@@ -465,7 +651,8 @@ app.use((req, res) => {
       'GET /api/spark/today',
       'GET /api/news',
       'GET /api/tips',
-      'POST /api/complete'
+      'POST /api/complete',
+      'POST /api/prompt-generator'
     ],
     timestamp: new Date().toISOString()
   });
@@ -499,6 +686,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log('  GET  /api/news?limit=10&source=OpenAI');
   console.log('  GET  /api/tips');
   console.log('  POST /api/complete (🤖 LLM Completion)');
+  console.log('  POST /api/prompt-generator (✨ NEW: 5 Prompt Styles)');
   console.log('\n✨ Backend ready!\n');
 });
 
