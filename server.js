@@ -1,1508 +1,694 @@
-// server.js - Vollständiges Backend für hohl.rocks mit LLM-Integration
-import express from 'express';
-import cors from 'cors';
-import Anthropic from '@anthropic-ai/sdk';
-import OpenAI from 'openai';
+// ===================================================================
+// HOHL.ROCKS BACKEND - Node.js/Express Server
+// Features: Prompt Generator + Optimizer + Library
+// ===================================================================
+
+import Anthropic from "@anthropic-ai/sdk";
+import express from "express";
+import cors from "cors";
 
 const app = express();
-
-// Environment Variables
 const PORT = process.env.PORT || 8080;
-const NODE_ENV = process.env.NODE_ENV || 'development';
 
-const ALLOWED_ORIGINS = [
-  'https://hohl.rocks',
-  'https://www.hohl.rocks',
-  'https://unbedingt-noch-lesbar.netlify.app',
-  'http://localhost:3000',
-  'http://127.0.0.1:3000'
-];
+// ===================================================================
+// MIDDLEWARE
+// ===================================================================
 
-console.log('[SERVER] Starting hohl.rocks Backend...');
-console.log('[SERVER] PORT:', PORT);
-console.log('[SERVER] NODE_ENV:', NODE_ENV);
-console.log('[SERVER] ALLOWED_ORIGINS:', ALLOWED_ORIGINS);
+app.use(express.json({ limit: "10mb" }));
 
-// API Keys Check
-const hasOpenAI = !!process.env.OPENAI_API_KEY;
-const hasAnthropic = !!process.env.ANTHROPIC_API_KEY;
-const hasOpenRouter = !!process.env.OPENROUTER_API_KEY;
-const hasPerplexity = !!process.env.PERPLEXITY_API_KEY;
+const allowedOrigins = process.env.ALLOWED_ORIGINS 
+  ? process.env.ALLOWED_ORIGINS.split(",")
+  : ["http://localhost:3000", "http://localhost:5173"];
 
-console.log('[SERVER] API Keys Status:');
-console.log('  - OpenAI:', hasOpenAI ? '✅' : '❌');
-console.log('  - Anthropic:', hasAnthropic ? '✅' : '❌');
-console.log('  - OpenRouter:', hasOpenRouter ? '✅' : '❌');
-console.log('  - Perplexity:', hasPerplexity ? '✅' : '❌');
-
-// Initialize API Clients
-const anthropic = hasAnthropic ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) : null;
-const openai = hasOpenAI ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
-
-// ==================== FEATURE #2: MODEL BATTLE LEADERBOARD ====================
-let battleLeaderboard = {
-  'claude-sonnet-4': { wins: 0, totalSpeed: 0, battles: 0 },
-  'gpt-4o-mini': { wins: 0, totalSpeed: 0, battles: 0 },
-  'sonar-pro': { wins: 0, totalSpeed: 0, battles: 0 }
-};
-
-// Middleware
-app.use(cors({ 
+app.use(cors({
   origin: (origin, callback) => {
-    if (!origin) {
-      console.log('[CORS] No origin - allowing');
-      return callback(null, true);
-    }
-    console.log('[CORS] Request from origin:', origin);
-    if (ALLOWED_ORIGINS.includes(origin)) {
-      console.log('[CORS] Origin allowed:', origin);
+    if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      console.log('[CORS] Origin BLOCKED:', origin);
-      callback(new Error('Not allowed by CORS'));
+      callback(new Error("Not allowed by CORS"));
     }
   },
-  credentials: true 
+  credentials: true,
 }));
 
-app.use(express.json());
+// ===================================================================
+// ANTHROPIC CLIENT
+// ===================================================================
 
-// Logging Middleware
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
-  next();
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// ==================== LLM INTEGRATION ====================
+const MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-4-20250514";
 
-/**
- * Wählt den verfügbaren LLM Provider aus
- */
-function pickProvider({ provider, euOnly } = {}) {
-  if (provider) return provider;
-  
-  if (euOnly) {
-    if (hasOpenRouter) return 'openrouter';
-    return hasAnthropic ? 'anthropic' : (hasOpenAI ? 'openai' : 'none');
-  }
-  
-  return hasAnthropic ? 'anthropic' : (hasOpenAI ? 'openai' : (hasOpenRouter ? 'openrouter' : 'none'));
-}
+// ===================================================================
+// FEATURED PROMPTS DATABASE (Static for now)
+// ===================================================================
 
-/**
- * LLM Completion - Generiert Text mit verfügbaren APIs
- */
-async function completeText(prompt, { system, provider, euOnly, maxTokens = 1000 } = {}) {
-  const picked = pickProvider({ provider, euOnly });
-  
-  try {
-    // OpenAI Integration
-    if (picked === 'openai' && hasOpenAI) {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
-        },
-        body: JSON.stringify({
-          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-          messages: [
-            system ? { role: 'system', content: system } : null,
-            { role: 'user', content: prompt }
-          ].filter(Boolean),
-          temperature: 0.7
-        })
-      });
-      
-      const data = await response.json();
-      return data?.choices?.[0]?.message?.content?.trim() || 'Keine Antwort.';
-    }
-    
-    // Anthropic Integration
-    if (picked === 'anthropic' && hasAnthropic) {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': process.env.ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01'
-        },
-        body: JSON.stringify({
-          model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
-          system,
-          max_tokens: maxTokens,
-          messages: [{ role: 'user', content: prompt }]
-        })
-      });
-      
-      const data = await response.json();
-      const content = Array.isArray(data?.content) 
-        ? data.content.map(x => x.text || '').join('\n').trim() 
-        : (data?.content || '');
-      return content || 'Keine Antwort.';
-    }
-    
-    // OpenRouter Integration
-    if (picked === 'openrouter' && hasOpenRouter) {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`
-        },
-        body: JSON.stringify({
-          model: process.env.OPENROUTER_MODEL || 'mistralai/mistral-small',
-          messages: [
-            system ? { role: 'system', content: system } : null,
-            { role: 'user', content: prompt }
-          ].filter(Boolean),
-          temperature: 0.7
-        })
-      });
-      
-      const data = await response.json();
-      return data?.choices?.[0]?.message?.content?.trim() || 'Keine Antwort.';
-    }
-  } catch (error) {
-    console.error('[LLM] Error:', error.message);
-    return null;
-  }
-  
-  return null;
-}
-
-// ==================== ROOT HEALTH CHECK ====================
-
-app.get('/', (req, res) => {
-  console.log('[ROOT] / called');
-  res.json({ 
-    status: 'ok',
-    message: 'hohl.rocks Backend API',
-    version: '3.0.0',
-    timestamp: new Date().toISOString(),
-    port: PORT,
-    environment: NODE_ENV,
-    apis: {
-      openai: hasOpenAI,
-      anthropic: hasAnthropic,
-      openrouter: hasOpenRouter,
-      perplexity: hasPerplexity
-    },
-    endpoints: [
-      'GET /health',
-      'GET /api/self',
-      'GET /api/spark/today',
-      'GET /api/news',
-      'GET /api/tips',
-      'POST /api/complete',
-      'POST /api/prompt-generator',
-      'POST /api/prompt-optimizer',
-      'POST /api/model-battle (SSE)',
-      'POST /api/model-battle/vote',
-      'GET /api/model-battle/leaderboard',
-      'POST /api/daily-challenge/get',
-      'POST /api/daily-challenge/submit',
-      'GET /api/daily-challenge/leaderboard'
-    ]
-  });
-});
-
-app.get('/health', (req, res) => {
-  console.log('[HEALTH] /health called');
-  res.json({ 
-    status: 'ok', 
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    port: PORT,
-    apis: {
-      openai: hasOpenAI,
-      anthropic: hasAnthropic,
-      openrouter: hasOpenRouter,
-      perplexity: hasPerplexity
-    }
-  });
-});
-
-// ==================== API ROUTES ====================
-
-// API: Self-Check
-app.get('/api/self', (req, res) => {
-  console.log('[API] /api/self called');
-  res.status(200).json({
-    ok: true,
-    version: '3.0.0',
-    timestamp: new Date().toISOString(),
-    ui: {
-      modalShade: 0.6,
-      removeNavSound: false
-    },
-    life: {
-      extendClick: 2000,
-      maxExtends: 3
-    },
-    backend: 'railway',
-    environment: NODE_ENV,
-    port: PORT,
-    apis: {
-      openai: hasOpenAI,
-      anthropic: hasAnthropic,
-      openrouter: hasOpenRouter,
-      perplexity: hasPerplexity
-    }
-  });
-});
-
-// API: Today's Spark (Dynamic with LLM or Static Fallback)
-const sparkTips = [
+const FEATURED_PROMPTS = [
+  // 🎨 CREATIVE CATEGORY
   {
-    title: 'KI-Prompt Basics',
-    text: 'Strukturierte Prompts mit Rolle, Ziel und Format führen zu besseren Ergebnissen.',
-    type: 'prompt'
+    id: 1,
+    title: "Story Architect",
+    prompt: "Du bist ein erfahrener Story-Architekt. Entwickle eine dreistufige Story-Struktur für [THEMA] mit: 1) Einem Hook der in 3 Sekunden fesselt, 2) Einer emotionalen Wendung in der Mitte, 3) Einem unvergesslichen Ende. Nutze die 'Show, don't tell' Methode und baue visuell starke Metaphern ein.",
+    category: "creative",
+    tags: ["storytelling", "content", "marketing"],
+    rating: 4.8,
+    uses: 1247,
+    author: "hohl.rocks",
+    featured: true
   },
   {
-    title: 'Claude Best Practice',
-    text: 'Nutze Beispiele in deinen Prompts – Claude lernt schnell von konkreten Cases.',
-    type: 'insight'
+    id: 2,
+    title: "Brand Voice Sculptor",
+    prompt: "Analysiere die Brand Voice von [MARKE] und erstelle darauf basierend 5 alternative Headline-Varianten für [PRODUKT/SERVICE]. Jede Variante sollte einen anderen emotionalen Trigger nutzen: Neugier, FOMO, Belonging, Empowerment, Humor. Begründe jeweils, warum dieser Trigger für die Zielgruppe funktioniert.",
+    category: "creative",
+    tags: ["branding", "copywriting", "marketing"],
+    rating: 4.9,
+    uses: 892,
+    author: "hohl.rocks",
+    featured: true
   },
   {
-    title: 'Token-Optimierung',
-    text: 'Spare Kosten durch klare, präzise Prompts statt langer, verschachtelter Anweisungen.',
-    type: 'tool'
+    id: 3,
+    title: "Visual Concept Generator",
+    prompt: "Ich brauche 3 unterschiedliche visuelle Konzepte für [KAMPAGNE/PROJEKT]. Für jedes Konzept beschreibe: 1) Die zentrale visuelle Metapher, 2) Farbpalette mit emotionaler Begründung, 3) Typografie-Stil, 4) Einen Moodboard-Vorschlag mit konkreten Referenzen. Denke wie ein Art Director, nicht wie ein Designer.",
+    category: "creative",
+    tags: ["design", "concept", "visual"],
+    rating: 4.7,
+    uses: 654,
+    author: "hohl.rocks",
+    featured: true
+  },
+
+  // 💼 BUSINESS CATEGORY
+  {
+    id: 4,
+    title: "Pitch Deck Strategist",
+    prompt: "Erstelle eine Pitch Deck Struktur (12 Slides) für [STARTUP/PRODUKT] die speziell auf [INVESTOR-TYP] zugeschnitten ist. Für jede Slide: 1) Headline die Investor Hook triggert, 2) Kernbotschaft in einem Satz, 3) Datenvisualisierungs-Empfehlung. Fokus auf: Problem-Solution-Fit, Market Size, Traction, Team Credibility.",
+    category: "business",
+    tags: ["pitch", "startup", "investment"],
+    rating: 4.9,
+    uses: 1891,
+    author: "hohl.rocks",
+    featured: true
   },
   {
-    title: 'Context Windows',
-    text: 'Nutze die vollen 200k Token von Claude für umfassende Analysen und Dokumentationen.',
-    type: 'insight'
+    id: 5,
+    title: "ROI Calculator Builder",
+    prompt: "Entwickle eine ROI-Kalkulation für [LÖSUNG/SERVICE] die in 3 Schritten zeigt: 1) Current State Costs (was kostet das Problem jetzt?), 2) Implementation Investment (einmalig + laufend), 3) Expected Savings/Revenue (konservativ, realistisch, optimistisch). Baue eine Excel-Formel-Struktur die der Kunde selbst anpassen kann.",
+    category: "business",
+    tags: ["roi", "sales", "b2b"],
+    rating: 4.6,
+    uses: 723,
+    author: "hohl.rocks",
+    featured: true
   },
   {
-    title: 'Iteratives Prompting',
-    text: 'Arbeite in Phasen: Erst Ideensammlung, dann Auswahl, dann Feinschliff.',
-    type: 'prompt'
+    id: 6,
+    title: "Competitive Analysis Framework",
+    prompt: "Erstelle ein Competitive Analysis Framework für [BRANCHE/PRODUKT] mit folgenden Dimensionen: Feature-Vergleich, Pricing-Strategie, Market Positioning, Customer Reviews Sentiment, GTM-Approach. Identifiziere für jeden Competitor: Unique Strength, Critical Weakness, Opportunity Gap. Leite daraus 3 strategische Empfehlungen ab.",
+    category: "business",
+    tags: ["strategy", "analysis", "competition"],
+    rating: 4.8,
+    uses: 1034,
+    author: "hohl.rocks",
+    featured: true
+  },
+
+  // ⚙️ TECHNICAL CATEGORY
+  {
+    id: 7,
+    title: "Code Review Assistant",
+    prompt: "Review folgenden Code-Block für [PROGRAMMIERSPRACHE]: [CODE]. Analysiere auf 3 Ebenen: 1) Funktionalität & Edge Cases, 2) Performance & Optimization Potenzial, 3) Code Quality & Best Practices. Für jedes Issue: Severity (Critical/Major/Minor), Begründung, Konkrete Lösung mit Code-Beispiel.",
+    category: "technical",
+    tags: ["code", "review", "development"],
+    rating: 4.7,
+    uses: 2156,
+    author: "hohl.rocks",
+    featured: true
   },
   {
-    title: 'DSGVO & KI',
-    text: 'Datensparsamkeit, Pseudonymisierung und EU-Anbieter sind die drei Säulen.',
-    type: 'funding'
+    id: 8,
+    title: "API Documentation Generator",
+    prompt: "Erstelle eine vollständige API-Dokumentation für [ENDPOINT/SERVICE] im OpenAPI 3.0 Format. Inkludiere: Request/Response Schemas, Error Codes mit Troubleshooting, Rate Limits, Authentication Flow, Code Examples in 3 Sprachen (Python, JavaScript, cURL). Zielgruppe: Developer die das API in 5 Minuten verstehen müssen.",
+    category: "technical",
+    tags: ["api", "documentation", "development"],
+    rating: 4.6,
+    uses: 891,
+    author: "hohl.rocks",
+    featured: true
   },
   {
-    title: 'RAG-Systeme',
-    text: 'Retrieval-Augmented Generation ermöglicht KI mit eigenem Wissensarchiv.',
-    type: 'tool'
+    id: 9,
+    title: "Database Schema Architect",
+    prompt: "Designe ein relationales Datenbank-Schema für [ANWENDUNGSFALL]. Definiere: Tabellen mit Feldern & Datentypen, Primary/Foreign Keys, Indizes für Performance, Constraints für Datenintegrität. Berücksichtige: Normalisierung (3NF), Query-Performance, Skalierbarkeit. Liefere SQL CREATE TABLE Statements und ein ER-Diagramm in Text-Form.",
+    category: "technical",
+    tags: ["database", "schema", "sql"],
+    rating: 4.9,
+    uses: 1456,
+    author: "hohl.rocks",
+    featured: true
+  },
+
+  // 📚 EDUCATION CATEGORY
+  {
+    id: 10,
+    title: "ELI5 Explainer",
+    prompt: "Erkläre [KOMPLEXES THEMA] in 3 Schwierigkeitsstufen: 1) ELI5 (für 5-Jährige mit Analogien), 2) High School Level (mit Fakten aber ohne Jargon), 3) Expert Level (mit Technical Details). Nutze für jede Stufe ein konkretes Real-World Beispiel. Ziel: Komplexität schrittweise aufbauen, nie überfordern.",
+    category: "education",
+    tags: ["explanation", "learning", "teaching"],
+    rating: 4.8,
+    uses: 3421,
+    author: "hohl.rocks",
+    featured: true
+  },
+  {
+    id: 11,
+    title: "Tutorial Step Builder",
+    prompt: "Erstelle ein Tutorial für [SKILL/TOOL] in 5-7 Schritten. Jeder Schritt: 1) Was du lernen wirst (Learning Objective), 2) Detaillierte Anleitung, 3) Häufiger Fehler + wie man ihn vermeidet, 4) Check dein Verständnis (Mini-Challenge). Endgoal: User kann nach Tutorial eigenständig [ERGEBNIS] produzieren.",
+    category: "education",
+    tags: ["tutorial", "learning", "howto"],
+    rating: 4.7,
+    uses: 2789,
+    author: "hohl.rocks",
+    featured: true
+  },
+  {
+    id: 12,
+    title: "Study Guide Synthesizer",
+    prompt: "Erstelle einen Study Guide für [THEMA/KURS] der diese Komponenten vereint: 1) Mindmap der Key Concepts mit Relationen, 2) Flashcards für die wichtigsten 20 Facts, 3) Practice Questions (Multiple Choice + Open Ended), 4) Mnemonic Devices für schwer zu merkende Infos, 5) Recommended Deep-Dive Resources.",
+    category: "education",
+    tags: ["study", "learning", "exam"],
+    rating: 4.9,
+    uses: 1876,
+    author: "hohl.rocks",
+    featured: true
+  },
+
+  // 📝 WRITING CATEGORY
+  {
+    id: 13,
+    title: "LinkedIn Post Formula",
+    prompt: "Schreibe einen LinkedIn Post über [THEMA] nach der 'Hook-Story-Value-CTA' Formel: 1) Hook erste Zeile (überraschender Fakt oder provokante These), 2) Kurze persönliche Story (60-80 Wörter), 3) Actionable Value (3 konkrete Takeaways), 4) Engagement CTA (Frage an Community). Ton: Authentisch, nicht verkauferisch. Länge: 150-200 Wörter.",
+    category: "writing",
+    tags: ["linkedin", "social", "content"],
+    rating: 4.8,
+    uses: 4512,
+    author: "hohl.rocks",
+    featured: true
+  },
+  {
+    id: 14,
+    title: "Email Subject Line Lab",
+    prompt: "Generiere 10 Email Subject Lines für [KAMPAGNE/NEWSLETTER] die verschiedene Psychological Triggers nutzen: Curiosity Gap, Urgency, Social Proof, Personalization, Benefit-Driven, Question-Based, Number-Driven, Humor, Controversy, Simplicity. Für jede Line: Geschätzter Open Rate Potential (Low/Med/High) + Begründung.",
+    category: "writing",
+    tags: ["email", "marketing", "copywriting"],
+    rating: 4.7,
+    uses: 3245,
+    author: "hohl.rocks",
+    featured: true
+  },
+  {
+    id: 15,
+    title: "Blog Post Outliner",
+    prompt: "Erstelle einen SEO-optimierten Blog Post Outline für [KEYWORD/THEMA]. Struktur: 1) Attention-Grabbing Title (mit Power Word), 2) Introduction mit Hook, 3) H2 Subheadings (mindestens 5) die Search Intent abdecken, 4) Key Points unter jedem H2, 5) FAQ Section (5 Fragen), 6) Conclusion mit CTA. Ziel: Featured Snippet + 8+ Min Lesedauer.",
+    category: "writing",
+    tags: ["blog", "seo", "content"],
+    rating: 4.9,
+    uses: 2891,
+    author: "hohl.rocks",
+    featured: true
+  },
+
+  // 🤖 AI/PROMPT ENGINEERING CATEGORY
+  {
+    id: 16,
+    title: "System Prompt Builder",
+    prompt: "Erstelle einen System Prompt für einen AI Assistant der [ROLLE/AUFGABE] erfüllt. Inkludiere: 1) Role Definition (Wer bist du, was ist deine Expertise?), 2) Task Boundaries (Was tust du, was nicht?), 3) Output Format (Struktur der Antworten), 4) Tone & Style Guidelines, 5) Edge Case Handling (Was bei unklaren Anfragen?). Teste mit 3 Example Inputs.",
+    category: "ai",
+    tags: ["prompt", "ai", "llm"],
+    rating: 4.9,
+    uses: 1789,
+    author: "hohl.rocks",
+    featured: true
+  },
+  {
+    id: 17,
+    title: "Few-Shot Prompt Designer",
+    prompt: "Designe einen Few-Shot Prompt für [AUFGABE] mit dieser Struktur: 1) Clear Instruction (Was soll Output sein?), 2) 3 Diverse Examples (Input → Output Pairs), 3) Edge Case Example (wie mit Ausnahmen umgehen), 4) Output Format Specification (JSON, Markdown, etc.), 5) Quality Criteria (was macht Output 'gut'?). Optimiere für Consistency.",
+    category: "ai",
+    tags: ["prompt", "few-shot", "llm"],
+    rating: 4.8,
+    uses: 1234,
+    author: "hohl.rocks",
+    featured: true
+  },
+  {
+    id: 18,
+    title: "Chain-of-Thought Optimizer",
+    prompt: "Konvertiere [SIMPLE PROMPT] in einen Chain-of-Thought Prompt der bessere Reasoning produziert. Struktur: 1) Problem Decomposition (Zerlege in Sub-Problems), 2) Step-by-Step Reasoning (Denke laut), 3) Self-Verification (Check deine Logik), 4) Final Answer. Vergleiche Output-Qualität vorher/nachher und erkläre den Unterschied.",
+    category: "ai",
+    tags: ["prompt", "cot", "reasoning"],
+    rating: 4.7,
+    uses: 987,
+    author: "hohl.rocks",
+    featured: true
+  },
+
+  // 💬 COMMUNICATION CATEGORY
+  {
+    id: 19,
+    title: "Feedback Sandwich Maker",
+    prompt: "Formuliere konstruktives Feedback für [SITUATION/PERSON] nach der 'Context-Behavior-Impact-Future' Methode: 1) Context (Was war die Situation?), 2) Observed Behavior (Was hast du gesehen? Fakten ohne Interpretation), 3) Impact (Wie hat es sich ausgewirkt?), 4) Future Action (Konkrete Verbesserungs-Vorschläge). Ton: Constructive, empathetic, action-oriented.",
+    category: "communication",
+    tags: ["feedback", "management", "leadership"],
+    rating: 4.8,
+    uses: 1567,
+    author: "hohl.rocks",
+    featured: true
+  },
+  {
+    id: 20,
+    title: "Meeting Agenda Architect",
+    prompt: "Erstelle eine Meeting Agenda für [MEETING-TYP] die in [DAUER] durchführbar ist. Für jedes Agenda Item: 1) Time Block (realistisch!), 2) Objective (Was soll erreicht werden?), 3) Owner (Wer führt?), 4) Prep Required (Was müssen Teilnehmer vorbereiten?). Endgoal: Alle wissen vor Meeting was erwartet wird + nach Meeting was next steps sind.",
+    category: "communication",
+    tags: ["meeting", "productivity", "management"],
+    rating: 4.6,
+    uses: 2134,
+    author: "hohl.rocks",
+    featured: true
+  },
+
+  // 📊 DATA/ANALYTICS CATEGORY
+  {
+    id: 21,
+    title: "Dashboard KPI Designer",
+    prompt: "Designe ein Dashboard für [BUSINESS FUNCTION] mit diesen Komponenten: 1) North Star Metric (Die EINE wichtigste Zahl), 2) Supporting KPIs (5-7 Metriken die North Star treiben), 3) Trend Indicators (WoW, MoM, YoY), 4) Alert Thresholds (Ab wann Action nötig?), 5) Recommended Visualizations (Chart Type + Why). Ziel: Actionable Insights auf einen Blick.",
+    category: "data",
+    tags: ["analytics", "kpi", "dashboard"],
+    rating: 4.7,
+    uses: 1456,
+    author: "hohl.rocks",
+    featured: true
+  },
+  {
+    id: 22,
+    title: "A/B Test Hypothesis Builder",
+    prompt: "Formuliere eine A/B Test Hypothese für [ÄNDERUNG/FEATURE] nach dem Format: 'Wir glauben dass [CHANGE] zu [EXPECTED OUTCOME] führt, weil [REASONING]. Wir messen das mit [PRIMARY METRIC] und erwarten [X% LIFT]. Wir brauchen [SAMPLE SIZE] über [DURATION].' Inkludiere: Success Criteria, Risk Assessment, Learning Objective.",
+    category: "data",
+    tags: ["testing", "hypothesis", "optimization"],
+    rating: 4.8,
+    uses: 1123,
+    author: "hohl.rocks",
+    featured: true
+  },
+
+  // 🎯 MARKETING CATEGORY
+  {
+    id: 23,
+    title: "Customer Persona Builder",
+    prompt: "Erstelle eine detaillierte Customer Persona für [PRODUKT/SERVICE] basierend auf Jobs-To-Be-Done Framework. Inkludiere: 1) Demographic Basics, 2) Job to be Done (funktional + emotional), 3) Pains & Gains, 4) Buying Triggers & Barriers, 5) Information Sources & Influencers, 6) 'A Day in the Life' Narrative. Mache die Persona real, nicht abstrakt.",
+    category: "marketing",
+    tags: ["persona", "customer", "strategy"],
+    rating: 4.9,
+    uses: 2345,
+    author: "hohl.rocks",
+    featured: true
+  },
+  {
+    id: 24,
+    title: "Value Proposition Canvas",
+    prompt: "Fülle einen Value Proposition Canvas für [PRODUKT] aus. Linke Seite (Customer Profile): Jobs, Pains, Gains. Rechte Seite (Value Map): Products/Services, Pain Relievers, Gain Creators. Für jedes Element: Konkrete Beispiele, nicht generische Statements. Identifiziere den stärksten Fit und formuliere daraus einen One-Liner Value Prop.",
+    category: "marketing",
+    tags: ["value", "proposition", "strategy"],
+    rating: 4.8,
+    uses: 1789,
+    author: "hohl.rocks",
+    featured: true
+  },
+
+  // 🚀 PRODUCTIVITY CATEGORY
+  {
+    id: 25,
+    title: "Sprint Planning Template",
+    prompt: "Erstelle einen Sprint Plan für [PROJEKT/FEATURE] nach dieser Struktur: 1) Sprint Goal (Was ist Success?), 2) User Stories mit Acceptance Criteria, 3) Task Breakdown mit Effort Estimates, 4) Dependency Map, 5) Risk Assessment & Mitigation. Nutze Story Points (Fibonacci) und berücksichtige Team Capacity. Endgoal: Realistic, achievable Sprint.",
+    category: "productivity",
+    tags: ["agile", "sprint", "project"],
+    rating: 4.7,
+    uses: 1567,
+    author: "hohl.rocks",
+    featured: true
+  },
+  {
+    id: 26,
+    title: "Decision Matrix Builder",
+    prompt: "Erstelle eine Decision Matrix für [ENTSCHEIDUNG] mit diesen Schritten: 1) Liste alle Optionen (min. 3), 2) Definiere Evaluation Criteria mit Weights (Total = 100%), 3) Score jede Option pro Criterion (1-10), 4) Calculate Weighted Scores, 5) Sensitivity Analysis (was wenn Weights ändern?). Empfehle die beste Option mit Begründung.",
+    category: "productivity",
+    tags: ["decision", "framework", "analysis"],
+    rating: 4.8,
+    uses: 1891,
+    author: "hohl.rocks",
+    featured: true
+  },
+
+  // 🎨 DESIGN CATEGORY
+  {
+    id: 27,
+    title: "UX Research Plan",
+    prompt: "Erstelle einen UX Research Plan für [FEATURE/PRODUKT] mit: 1) Research Questions (Was wollen wir lernen?), 2) Methodology (Interviews, Surveys, Usability Tests?), 3) Participant Criteria & Recruitment, 4) Discussion Guide / Test Script, 5) Analysis Framework, 6) Timeline & Resources. Ziel: Actionable Insights, nicht nur 'interesting findings'.",
+    category: "design",
+    tags: ["ux", "research", "testing"],
+    rating: 4.7,
+    uses: 1234,
+    author: "hohl.rocks",
+    featured: true
+  },
+  {
+    id: 28,
+    title: "Design System Foundation",
+    prompt: "Lege das Foundation für ein Design System für [PRODUKT/BRAND] fest: 1) Color Palette (Primary, Secondary, Semantic Colors mit Hex), 2) Typography Scale (Font Families, Sizes, Line Heights), 3) Spacing System (4pt/8pt Grid?), 4) Component Naming Convention, 5) Accessibility Standards (WCAG Level). Liefere Design Tokens in JSON Format.",
+    category: "design",
+    tags: ["design-system", "ui", "foundation"],
+    rating: 4.9,
+    uses: 1678,
+    author: "hohl.rocks",
+    featured: true
+  },
+
+  // 💡 INNOVATION CATEGORY
+  {
+    id: 29,
+    title: "SCAMPER Ideation",
+    prompt: "Nutze die SCAMPER Methode um [PRODUKT/SERVICE] neu zu denken: S - Substitute (Was ersetzen?), C - Combine (Was kombinieren?), A - Adapt (Was anpassen?), M - Modify (Was verändern?), P - Put to other use (Andere Nutzung?), E - Eliminate (Was weglassen?), R - Reverse (Was umkehren?). Für jede Dimension: 2-3 konkrete Ideen. Bewerte Top 3 nach Feasibility & Impact.",
+    category: "innovation",
+    tags: ["ideation", "creativity", "innovation"],
+    rating: 4.8,
+    uses: 987,
+    author: "hohl.rocks",
+    featured: true
+  },
+  {
+    id: 30,
+    title: "Trend Forecasting Framework",
+    prompt: "Analysiere Trends in [INDUSTRIE/BEREICH] und forecaste Entwicklungen für die nächsten 12-24 Monate. Nutze PESTEL Framework (Political, Economic, Social, Technological, Environmental, Legal). Für jeden Trend: Current State, Driving Forces, Potential Disruptions, Strategic Implications. Identifiziere 3 'Weak Signals' die andere noch nicht sehen.",
+    category: "innovation",
+    tags: ["trends", "forecast", "strategy"],
+    rating: 4.7,
+    uses: 1345,
+    author: "hohl.rocks",
+    featured: true
   }
 ];
 
-app.get('/api/spark/today', async (req, res) => {
-  console.log('[API] /api/spark/today called');
-  
-  const date = new Date().toISOString().split('T')[0];
-  const tipIndex = new Date().getDate() % sparkTips.length;
-  const baseTip = sparkTips[tipIndex];
-  
-  if (!hasAnthropic && !hasOpenAI) {
-    return res.json({
-      title: baseTip.title,
-      text: baseTip.text,
-      type: baseTip.type,
-      date,
-      fallback: true
-    });
-  }
-  
+// ===================================================================
+// HELPER FUNCTIONS
+// ===================================================================
+
+async function callClaude(systemPrompt, userPrompt, maxTokens = 1500) {
   try {
-    const prompt = `Erstelle einen prägnanten, inspirie renden KI-Tipp für heute zum Thema "${baseTip.title}".
-Fokus: ${baseTip.type === 'prompt' ? 'Prompt Engineering' : baseTip.type === 'insight' ? 'KI-Insights' : baseTip.type === 'tool' ? 'KI-Tools' : 'KI-Förderung'}
-Max. 2 Sätze, praktisch & actionable.`;
-    
-    const dynamicText = await completeText(prompt, { maxTokens: 150 });
-    
-    res.json({
-      title: baseTip.title,
-      text: dynamicText || baseTip.text,
-      type: baseTip.type,
-      date,
-      dynamic: !!dynamicText,
-      fallback: !dynamicText
+    const message = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      messages: [
+        {
+          role: "user",
+          content: userPrompt,
+        },
+      ],
     });
+
+    return message.content[0].text;
   } catch (error) {
-    console.error('[SPARK] Error:', error);
-    res.json({
-      title: baseTip.title,
-      text: baseTip.text,
-      type: baseTip.type,
-      date,
-      fallback: true,
-      error: error.message
-    });
+    console.error("Anthropic API Error:", error);
+    throw error;
   }
-});
-
-// API: KI-News
-app.get('/api/news', (req, res) => {
-  console.log('[API] /api/news called');
-  
-  const newsItems = [
-    {
-      id: 'n1',
-      title: 'EU AI Act tritt in Kraft',
-      summary: 'Erste KI-Verordnung weltweit setzt neue Standards für KI-Systeme in Europa.',
-      date: '2024-08-01',
-      source: 'EU Commission'
-    },
-    {
-      id: 'n2',
-      title: 'Claude 4 veröffentlicht',
-      summary: 'Anthropic präsentiert Claude 4 mit verbessertem Reasoning und 200k Context.',
-      date: '2024-11-05',
-      source: 'Anthropic'
-    },
-    {
-      id: 'n3',
-      title: 'DSGVO-konforme KI-Tools',
-      summary: 'Neue Richtlinien für datenschutzkonforme KI-Implementierung in Deutschland.',
-      date: '2024-10-15',
-      source: 'BSI'
-    }
-  ];
-  
-  res.json(newsItems);
-});
-
-// API: KI-Tips
-app.get('/api/tips', (req, res) => {
-  console.log('[API] /api/tips called');
-  res.json(sparkTips);
-});
-
-// API: Complete (Generic LLM Endpoint)
-app.post('/api/complete', async (req, res) => {
-  console.log('[API] /api/complete called');
-  
-  const { prompt, system, provider, euOnly, maxTokens } = req.body;
-  
-  if (!prompt) {
-    return res.status(400).json({ error: 'missing_prompt' });
-  }
-  
-  const result = await completeText(prompt, { system, provider, euOnly, maxTokens });
-  
-  if (!result) {
-    return res.status(503).json({ error: 'no_llm_available' });
-  }
-  
-  res.json({ result });
-});
-
-// ==================== PROMPT GENERATOR API ====================
-
-app.post('/api/prompt-generator', async (req, res) => {
-  console.log('[API] /api/prompt-generator called');
-  
-  const { topic } = req.body;
-  
-  if (!topic || typeof topic !== 'string') {
-    return res.status(400).json({
-      error: 'missing_topic',
-      message: 'Topic is required'
-    });
-  }
-  
-  const cleanTopic = topic.trim();
-  
-  if (cleanTopic.length < 3) {
-    return res.status(400).json({
-      error: 'topic_too_short',
-      message: 'Topic must be at least 3 characters'
-    });
-  }
-  
-  if (cleanTopic.length > 200) {
-    return res.status(400).json({
-      error: 'topic_too_long',
-      message: 'Topic must be max 200 characters'
-    });
-  }
-  
-  if (!hasAnthropic && !hasOpenAI) {
-    const fallbackStyles = [
-      {
-        name: 'Executive',
-        prompt: `Analysiere die strategischen Business-Implikationen von ${cleanTopic} für C-Level Entscheidungsträger.`,
-        description: 'Business-strategisch',
-        icon: '💼'
-      },
-      {
-        name: 'Technical',
-        prompt: `Erkläre die technische Implementierung und Architektur von ${cleanTopic} mit Code-Beispielen.`,
-        description: 'Entwickler-fokussiert',
-        icon: '⚙️'
-      },
-      {
-        name: 'Creative',
-        prompt: `Entwickle 5 innovative, out-of-the-box Ideen wie ${cleanTopic} disruptiv eingesetzt werden kann.`,
-        description: 'Innovativ & Kreativ',
-        icon: '🎨'
-      },
-      {
-        name: 'Tutorial',
-        prompt: `Erstelle eine Schritt-für-Schritt Anleitung zu ${cleanTopic}. Wie kann ein Anfänger damit starten?`,
-        description: 'Pädagogischer Ansatz',
-        icon: '📚'
-      },
-      {
-        name: 'Expert',
-        prompt: `Analysiere ${cleanTopic} auf Expertenniveau. Welche subtilen Nuancen, fortgeschrittenen Patterns und Edge Cases gibt es?`,
-        description: 'Deep-dive Analyse',
-        icon: '🎓'
-      }
-    ];
-    
-    return res.json({
-      topic: cleanTopic,
-      styles: fallbackStyles,
-      timestamp: new Date().toISOString(),
-      fallback: true
-    });
-  }
-  
-  try {
-    const systemPrompt = `Du bist ein Expert Prompt Engineer. Erstelle 5 verschiedene Prompt-Styles für das Thema.
-Jeder Style soll einen anderen Blickwinkel bieten.
-
-Antworte NUR mit folgendem JSON Format (ohne Markdown):
-{
-  "styles": [
-    {
-      "name": "Executive",
-      "prompt": "Der komplette Prompt hier...",
-      "description": "Kurze Beschreibung",
-      "icon": "💼"
-    }
-  ]
 }
+
+// ===================================================================
+// ROUTES
+// ===================================================================
+
+// Health Check
+app.get("/", (req, res) => {
+  res.json({
+    status: "ok",
+    message: "hohl.rocks backend is running",
+    features: ["prompt-generator", "prompt-optimizer", "prompt-library"],
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// ===================================================================
+// FEATURE #1: PROMPT GENERATOR
+// ===================================================================
+
+app.post("/api/prompt-generator", async (req, res) => {
+  try {
+    const { topic } = req.body;
+
+    if (!topic || typeof topic !== "string" || topic.trim().length === 0) {
+      return res.status(400).json({
+        error: "Invalid input",
+        message: "Topic is required and must be a non-empty string",
+      });
+    }
+
+    const systemPrompt = `Du bist ein Prompt Engineering Experte. Deine Aufgabe ist es, für ein gegebenes Thema 5 verschiedene Prompt-Styles zu generieren.
 
 Die 5 Styles sind:
-1. Executive (💼) - Business/C-Level Perspektive
-2. Technical (⚙️) - Entwickler/Implementation
-3. Creative (🎨) - Innovative Ansätze
-4. Tutorial (📚) - Anfänger-freundlich
-5. Expert (🎓) - Deep-dive Analyse`;
+1. EXECUTIVE: Business-strategisch, ROI-fokussiert, für C-Level
+2. TECHNICAL: Entwickler-orientiert, implementierungs-fokussiert, technisch präzise
+3. CREATIVE: Out-of-the-box, metaphorisch, visuell anregend
+4. TUTORIAL: Step-by-step, didaktisch, für Anfänger geeignet
+5. EXPERT: Deep-dive, akademisch, für Experten
 
-    const result = await completeText(
-      `Erstelle 5 Prompt-Styles für: ${cleanTopic}`,
-      { system: systemPrompt, maxTokens: 1500 }
-    );
-    
-    if (!result) throw new Error('LLM returned empty');
-    
-    let cleaned = result.trim();
-    if (cleaned.includes('```json')) {
-      cleaned = cleaned.split('```json')[1].split('```')[0].trim();
-    }
-    
-    const parsed = JSON.parse(cleaned);
-    
-    res.json({
-      topic: cleanTopic,
-      styles: parsed.styles || [],
-      timestamp: new Date().toISOString()
-    });
-    
-  } catch (error) {
-    console.error('[GENERATOR] Error:', error);
-    
-    const fallbackStyles = [
-      {
-        name: 'Executive',
-        prompt: `Analysiere die strategischen Business-Implikationen von ${cleanTopic} für C-Level Entscheidungsträger.`,
-        description: 'Business-strategisch',
-        icon: '💼'
-      },
-      {
-        name: 'Technical',
-        prompt: `Erkläre die technische Implementierung und Architektur von ${cleanTopic} mit Code-Beispielen.`,
-        description: 'Entwickler-fokussiert',
-        icon: '⚙️'
-      },
-      {
-        name: 'Creative',
-        prompt: `Entwickle 5 innovative, out-of-the-box Ideen wie ${cleanTopic} disruptiv eingesetzt werden kann.`,
-        description: 'Innovativ & Kreativ',
-        icon: '🎨'
-      },
-      {
-        name: 'Tutorial',
-        prompt: `Erstelle eine Schritt-für-Schritt Anleitung zu ${cleanTopic}. Wie kann ein Anfänger damit starten?`,
-        description: 'Pädagogischer Ansatz',
-        icon: '📚'
-      },
-      {
-        name: 'Expert',
-        prompt: `Analysiere ${cleanTopic} auf Expertenniveau. Welche subtilen Nuancen, fortgeschrittenen Patterns und Edge Cases gibt es?`,
-        description: 'Deep-dive Analyse',
-        icon: '🎓'
-      }
-    ];
-    
-    res.json({
-      topic: cleanTopic,
-      styles: fallbackStyles,
-      timestamp: new Date().toISOString(),
-      fallback: true
-    });
-  }
-});
+Jeder Prompt sollte:
+- Spezifisch und actionable sein
+- Den jeweiligen Style klar repräsentieren
+- 2-4 Sätze lang sein
+- Deutsche Sprache nutzen
 
-// ==================== PROMPT OPTIMIZER API ====================
+Ausgabeformat (genau so formatieren):
+[STYLE_NAME]
+[Prompt Text hier]
 
-app.post('/api/prompt-optimizer', async (req, res) => {
-  console.log('[API] /api/prompt-optimizer called');
-  
-  const { prompt } = req.body;
-  
-  if (!prompt || typeof prompt !== 'string') {
-    return res.status(400).json({
-      error: 'missing_prompt',
-      message: 'Prompt is required and must be a string'
-    });
-  }
-  
-  const cleanPrompt = prompt.trim();
-  
-  if (cleanPrompt.length < 5) {
-    return res.status(400).json({
-      error: 'prompt_too_short',
-      message: 'Prompt must be at least 5 characters'
-    });
-  }
-  
-  if (cleanPrompt.length > 1000) {
-    return res.status(400).json({
-      error: 'prompt_too_long',
-      message: 'Prompt must be max 1000 characters'
-    });
-  }
-  
-  if (!hasAnthropic && !hasOpenAI) {
-    return res.status(503).json({
-      error: 'no_llm_available',
-      message: 'Keine LLM-APIs konfiguriert für Prompt-Optimierung'
-    });
-  }
-  
-  try {
-    const systemPrompt = `Du bist ein Expert Prompt Engineer mit jahrelanger Erfahrung.
-Deine Aufgabe ist es, Prompts zu analysieren und zu verbessern.
+[STYLE_NAME]
+[Prompt Text hier]
 
-Bewerte den gegebenen Prompt nach folgenden Kriterien:
-1. Klarheit (Ist das Ziel klar?)
-2. Spezifität (Ist der Prompt konkret genug?)
-3. Kontext (Ist ausreichend Kontext gegeben?)
-4. Struktur (Ist der Prompt gut strukturiert?)
-5. Umsetzbarkeit (Ist der Prompt actionable?)
+etc.`;
 
-Gib eine ehrliche Bewertung von 1-10 und identifiziere konkrete Probleme.
-Dann erstelle einen DEUTLICH verbesserten Prompt (Score 8-10).
+    const userPrompt = `Thema: ${topic.trim()}
 
-Antworte NUR mit folgendem JSON Format (ohne Markdown):
-{
-  "original_score": 4,
-  "improved_score": 9,
-  "problems": [
-    "Zu vage formuliert",
-    "Kein Kontext gegeben",
-    "Keine Qualitätskriterien"
-  ],
-  "improvements": [
-    "Klare Rolle definiert",
-    "Spezifisches Ziel formuliert",
-    "Output-Format festgelegt",
-    "Qualitätskriterien hinzugefügt"
-  ],
-  "improved_prompt": "Der komplett neu formulierte, deutlich bessere Prompt hier...",
-  "explanation": "Kurze Erklärung (2-3 Sätze) warum der neue Prompt besser ist"
-}
+Generiere 5 verschiedene Prompt-Styles (Executive, Technical, Creative, Tutorial, Expert) für dieses Thema.`;
 
-WICHTIG: 
-- Der verbesserte Prompt sollte 3-5x länger sein als das Original
-- Füge Struktur, Kontext, Beispiele und Qualitätskriterien hinzu
-- Sei ehrlich beim Score - schlechte Prompts bekommen 2-4/10
-- Verbesserte Prompts sollten 8-10/10 erreichen`;
+    const response = await callClaude(systemPrompt, userPrompt, 2000);
 
-    const userPrompt = `Analysiere und verbessere diesen Prompt:\n\n"${cleanPrompt}"`;
-    
-    const result = await completeText(userPrompt, {
-      system: systemPrompt,
-      provider: hasAnthropic ? 'anthropic' : 'openai',
-      maxTokens: 2000
-    });
-    
-    if (!result) {
-      throw new Error('LLM returned empty result');
-    }
-    
-    let cleanedResult = result.trim();
-    
-    if (cleanedResult.includes('```json')) {
-      cleanedResult = cleanedResult.split('```json')[1].split('```')[0].trim();
-    } else if (cleanedResult.includes('```')) {
-      cleanedResult = cleanedResult.split('```')[1].split('```')[0].trim();
-    }
-    
-    let analysis;
-    try {
-      analysis = JSON.parse(cleanedResult);
-    } catch (parseError) {
-      console.error('[OPTIMIZER] JSON Parse Error:', parseError);
-      throw new Error('JSON parsing failed');
-    }
-    
-    if (analysis.original_score < 1 || analysis.original_score > 10) {
-      analysis.original_score = Math.max(1, Math.min(10, analysis.original_score));
-    }
-    if (analysis.improved_score < 1 || analysis.improved_score > 10) {
-      analysis.improved_score = Math.max(1, Math.min(10, analysis.improved_score));
-    }
-    
-    res.json({
-      original_prompt: cleanPrompt,
-      original_score: analysis.original_score,
-      improved_score: analysis.improved_score,
-      problems: analysis.problems || [],
-      improvements: analysis.improvements || [],
-      improved_prompt: analysis.improved_prompt || cleanPrompt,
-      explanation: analysis.explanation || 'Keine Erklärung verfügbar',
-      timestamp: new Date().toISOString()
-    });
-    
-  } catch (error) {
-    console.error('[OPTIMIZER] Error:', error);
-    
-    const fallbackAnalysis = {
-      original_prompt: cleanPrompt,
-      original_score: 4,
-      improved_score: 8,
-      problems: [
-        'Prompt zu unspezifisch',
-        'Kein Kontext gegeben',
-        'Keine Struktur vorhanden'
-      ],
-      improvements: [
-        'Klare Rolle definiert',
-        'Spezifisches Ziel formuliert',
-        'Strukturiertes Output-Format',
-        'Qualitätskriterien hinzugefügt'
-      ],
-      improved_prompt: `Als erfahrener AI-Assistent mit Expertise in [Themenbereich]:
+    // Parse die Antwort
+    const styles = {};
+    const sections = response.split("\n\n").filter((s) => s.trim());
 
-Aufgabe: ${cleanPrompt}
+    const styleNames = ["executive", "technical", "creative", "tutorial", "expert"];
+    let currentIndex = 0;
 
-Bitte berücksichtige:
-1. Stelle ausreichend Kontext bereit
-2. Erkläre Zusammenhänge verständlich
-3. Gib konkrete, umsetzbare Empfehlungen
-4. Nenne Quellen oder Beispiele wo möglich
-
-Format: Strukturierte Antwort mit klaren Abschnitten
-
-Qualität: Präzise, faktentreu und hilfreich`,
-      explanation: 'Der verbesserte Prompt fügt Rolle, Struktur und Qualitätskriterien hinzu, was zu deutlich besseren Ergebnissen führt.',
-      timestamp: new Date().toISOString(),
-      fallback: true
-    };
-    
-    res.json(fallbackAnalysis);
-  }
-});
-
-// ==================== FEATURE #2: MODEL BATTLE ARENA ====================
-
-/**
- * POST /api/model-battle
- * Server-Sent Events (SSE) Stream für parallele LLM-Antworten
- */
-app.post('/api/model-battle', async (req, res) => {
-  console.log('🥊 Model Battle started');
-  
-  const { prompt } = req.body;
-
-  // Validation
-  if (!prompt || typeof prompt !== 'string') {
-    return res.status(400).json({ 
-      success: false, 
-      error: 'Prompt ist erforderlich' 
-    });
-  }
-
-  if (prompt.length > 500) {
-    return res.status(400).json({ 
-      success: false, 
-      error: 'Prompt zu lang (max 500 Zeichen)' 
-    });
-  }
-
-  // Setup SSE
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
-
-  const sendEvent = (data) => {
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
-  };
-
-  // Track timing
-  const startTimes = {
-    claude: Date.now(),
-    openai: Date.now(),
-    perplexity: Date.now()
-  };
-
-  const endTimes = {
-    claude: null,
-    openai: null,
-    perplexity: null
-  };
-
-  const responses = {
-    claude: '',
-    openai: '',
-    perplexity: ''
-  };
-
-  // ========================================
-  // 1. CLAUDE STREAM
-  // ========================================
-  const claudeStream = async () => {
-    try {
-      sendEvent({ 
-        type: 'status', 
-        model: 'claude', 
-        message: 'Claude Sonnet 4 startet...' 
-      });
-
-      if (!anthropic) {
-        throw new Error('Anthropic API not configured');
-      }
-
-      const stream = await anthropic.messages.create({
-        model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        messages: [{ 
-          role: 'user', 
-          content: prompt 
-        }],
-        stream: true
-      });
-
-      for await (const chunk of stream) {
-        if (chunk.type === 'content_block_delta' && 
-            chunk.delta?.type === 'text_delta') {
-          
-          const text = chunk.delta.text;
-          responses.claude += text;
-          
-          sendEvent({
-            type: 'chunk',
-            model: 'claude',
-            text: text,
-            fullText: responses.claude
-          });
-        }
-      }
-
-      endTimes.claude = Date.now();
-      const speed = ((endTimes.claude - startTimes.claude) / 1000).toFixed(2);
-
-      sendEvent({
-        type: 'complete',
-        model: 'claude',
-        speed: speed,
-        text: responses.claude
-      });
-
-      console.log(`✅ Claude finished in ${speed}s`);
-
-    } catch (error) {
-      console.error('❌ Claude error:', error);
-      sendEvent({
-        type: 'error',
-        model: 'claude',
-        error: 'Claude hat nicht geantwortet'
-      });
-      responses.claude = '❌ Fehler bei Claude';
-      endTimes.claude = Date.now();
-    }
-  };
-
-  // ========================================
-  // 2. OPENAI STREAM
-  // ========================================
-  const openaiStream = async () => {
-    try {
-      sendEvent({ 
-        type: 'status', 
-        model: 'openai', 
-        message: 'GPT-4 startet...' 
-      });
-
-      if (!openai) {
-        throw new Error('OpenAI API not configured');
-      }
-
-      const stream = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-        messages: [{ 
-          role: 'user', 
-          content: prompt 
-        }],
-        max_tokens: 1000,
-        stream: true
-      });
-
-      for await (const chunk of stream) {
-        const text = chunk.choices[0]?.delta?.content || '';
-        if (text) {
-          responses.openai += text;
-          
-          sendEvent({
-            type: 'chunk',
-            model: 'openai',
-            text: text,
-            fullText: responses.openai
-          });
-        }
-      }
-
-      endTimes.openai = Date.now();
-      const speed = ((endTimes.openai - startTimes.openai) / 1000).toFixed(2);
-
-      sendEvent({
-        type: 'complete',
-        model: 'openai',
-        speed: speed,
-        text: responses.openai
-      });
-
-      console.log(`✅ OpenAI finished in ${speed}s`);
-
-    } catch (error) {
-      console.error('❌ OpenAI error:', error);
-      sendEvent({
-        type: 'error',
-        model: 'openai',
-        error: 'GPT-4 hat nicht geantwortet'
-      });
-      responses.openai = '❌ Fehler bei GPT-4';
-      endTimes.openai = Date.now();
-    }
-  };
-
-  // ========================================
-  // 3. PERPLEXITY STREAM
-  // ========================================
-  const perplexityStream = async () => {
-    try {
-      sendEvent({ 
-        type: 'status', 
-        model: 'perplexity', 
-        message: 'Perplexity Sonar Pro startet...' 
-      });
-
-      if (!hasPerplexity) {
-        throw new Error('Perplexity API not configured');
-      }
-
-      const response = await fetch('https://api.perplexity.ai/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.PERPLEXITY_API_KEY}`
-        },
-        body: JSON.stringify({
-          model: process.env.PERPLEXITY_MODEL || 'sonar-pro',
-          messages: [{ 
-            role: 'user', 
-            content: prompt 
-          }],
-          max_tokens: 1000,
-          stream: true
-        })
-      });
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n').filter(line => line.trim());
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6);
-            if (data === '[DONE]') continue;
-
-            try {
-              const json = JSON.parse(data);
-              const text = json.choices[0]?.delta?.content || '';
-              
-              if (text) {
-                responses.perplexity += text;
-                
-                sendEvent({
-                  type: 'chunk',
-                  model: 'perplexity',
-                  text: text,
-                  fullText: responses.perplexity
-                });
-              }
-            } catch (e) {
-              // Skip parsing errors
-            }
-          }
-        }
-      }
-
-      endTimes.perplexity = Date.now();
-      const speed = ((endTimes.perplexity - startTimes.perplexity) / 1000).toFixed(2);
-
-      sendEvent({
-        type: 'complete',
-        model: 'perplexity',
-        speed: speed,
-        text: responses.perplexity
-      });
-
-      console.log(`✅ Perplexity finished in ${speed}s`);
-
-    } catch (error) {
-      console.error('❌ Perplexity error:', error);
-      sendEvent({
-        type: 'error',
-        model: 'perplexity',
-        error: 'Perplexity hat nicht geantwortet'
-      });
-      responses.perplexity = '❌ Fehler bei Perplexity';
-      endTimes.perplexity = Date.now();
-    }
-  };
-
-  // ========================================
-  // PARALLEL EXECUTION
-  // ========================================
-  try {
-    // Start all 3 streams parallel
-    await Promise.all([
-      claudeStream(),
-      openaiStream(),
-      perplexityStream()
-    ]);
-
-    // All done - send final summary
-    sendEvent({
-      type: 'battle-complete',
-      speeds: {
-        claude: ((endTimes.claude - startTimes.claude) / 1000).toFixed(2),
-        openai: ((endTimes.openai - startTimes.openai) / 1000).toFixed(2),
-        perplexity: ((endTimes.perplexity - startTimes.perplexity) / 1000).toFixed(2)
-      },
-      responses: {
-        claude: responses.claude,
-        openai: responses.openai,
-        perplexity: responses.perplexity
+    sections.forEach((section) => {
+      const lines = section.split("\n").filter((l) => l.trim());
+      if (lines.length >= 2) {
+        const styleName = styleNames[currentIndex] || `style_${currentIndex}`;
+        const promptText = lines.slice(1).join(" ").trim();
+        styles[styleName] = promptText;
+        currentIndex++;
       }
     });
 
-    console.log('🎉 Battle complete!');
-    res.end();
-
-  } catch (error) {
-    console.error('❌ Battle error:', error);
-    sendEvent({
-      type: 'error',
-      error: 'Battle konnte nicht abgeschlossen werden'
-    });
-    res.end();
-  }
-});
-
-/**
- * POST /api/model-battle/vote
- * User voting für Leaderboard
- */
-app.post('/api/model-battle/vote', async (req, res) => {
-  const { winner, speeds } = req.body;
-
-  if (!winner || !['claude-sonnet-4', 'gpt-4o-mini', 'sonar-pro'].includes(winner)) {
-    return res.status(400).json({ 
-      success: false, 
-      error: 'Invalid winner' 
-    });
-  }
-
-  // Update Leaderboard
-  battleLeaderboard[winner].wins += 1;
-
-  // Update speeds
-  if (speeds) {
-    if (speeds.claude) {
-      battleLeaderboard['claude-sonnet-4'].totalSpeed += parseFloat(speeds.claude);
-      battleLeaderboard['claude-sonnet-4'].battles += 1;
-    }
-    if (speeds.openai) {
-      battleLeaderboard['gpt-4o-mini'].totalSpeed += parseFloat(speeds.openai);
-      battleLeaderboard['gpt-4o-mini'].battles += 1;
-    }
-    if (speeds.perplexity) {
-      battleLeaderboard['sonar-pro'].totalSpeed += parseFloat(speeds.perplexity);
-      battleLeaderboard['sonar-pro'].battles += 1;
-    }
-  }
-
-  res.json({ 
-    success: true, 
-    leaderboard: battleLeaderboard 
-  });
-});
-
-/**
- * GET /api/model-battle/leaderboard
- * Aktuelles Leaderboard abrufen
- */
-app.get('/api/model-battle/leaderboard', (req, res) => {
-  // Calculate averages
-  const leaderboard = Object.entries(battleLeaderboard).map(([model, stats]) => ({
-    model,
-    wins: stats.wins,
-    avgSpeed: stats.battles > 0 
-      ? (stats.totalSpeed / stats.battles).toFixed(2) 
-      : 0,
-    battles: stats.battles
-  }));
-
-  // Sort by wins
-  leaderboard.sort((a, b) => b.wins - a.wins);
-
-  res.json({ 
-    success: true, 
-    leaderboard 
-  });
-});
-
-
-// ========================================
-// FEATURE #4: DAILY AI CHALLENGE 🎮
-// ========================================
-function getDailyChallengePrompt(date) {
-  const challenges = [
-    {
-      type: "Elevator Pitch",
-      prompt: "Schreibe einen 60-Sekunden Elevator Pitch für ein innovatives Startup-Konzept deiner Wahl. Erkläre das Problem, die Lösung und den einzigartigen Wert.",
-      category: "Business",
-      difficulty: "Medium",
-      tips: [
-        "Starte mit einem Hook",
-        "Erkläre das Problem klar",
-        "Präsentiere deine Lösung",
-        "Zeige den Markt/das Potenzial"
-      ]
-    },
-    {
-      type: "Product Description",
-      prompt: "Erstelle eine überzeugende Produktbeschreibung für ein alltägliches Objekt, als wäre es eine bahnbrechende Innovation. Mache das Gewöhnliche außergewöhnlich.",
-      category: "Marketing",
-      difficulty: "Easy",
-      tips: [
-        "Nutze sensorische Details",
-        "Betone einzigartige Features",
-        "Spreche Emotionen an",
-        "Schaffe Dringlichkeit"
-      ]
-    },
-    {
-      type: "Technical Explainer",
-      prompt: "Erkläre ein komplexes technisches Konzept (wie Blockchain, Quantencomputing oder KI) so, dass es ein 10-Jähriger versteht. Nutze Analogien und einfache Sprache.",
-      category: "Education",
-      difficulty: "Hard",
-      tips: [
-        "Verwende Alltags-Analogien",
-        "Vermeide Fachjargon",
-        "Nutze konkrete Beispiele",
-        "Baue logisch aufeinander auf"
-      ]
-    },
-    {
-      type: "Story Opening",
-      prompt: "Schreibe die ersten 3 Sätze einer fesselnden Kurzgeschichte. Der Leser muss sofort weiterlesen wollen. Jedes Genre ist erlaubt.",
-      category: "Creative",
-      difficulty: "Medium",
-      tips: [
-        "Starte mit einem Hook",
-        "Schaffe Atmosphäre",
-        "Werfe Fragen auf",
-        "Zeige, erzähle nicht nur"
-      ]
-    },
-    {
-      type: "Social Media Post",
-      prompt: "Erstelle einen viralen Social Media Post (max. 280 Zeichen) über ein aktuelles Trend-Thema. Der Post muss Engagement erzeugen: Likes, Comments, Shares.",
-      category: "Marketing",
-      difficulty: "Easy",
-      tips: [
-        "Sei kontrovers oder überraschend",
-        "Nutze einen klaren Call-to-Action",
-        "Emotionen > Fakten",
-        "Frage die Community"
-      ]
-    },
-    {
-      type: "Problem Solution",
-      prompt: "Identifiziere ein alltägliches Problem in deiner Stadt/Region und präsentiere eine kreative, umsetzbare Lösung in 150 Wörtern.",
-      category: "Business",
-      difficulty: "Medium",
-      tips: [
-        "Problem klar definieren",
-        "Lösung konkret beschreiben",
-        "Machbarkeit zeigen",
-        "Impact darstellen"
-      ]
-    },
-    {
-      type: "Character Bio",
-      prompt: "Erstelle eine detaillierte Biografie für einen fiktiven Charakter (200 Wörter). Mache ihn so real und interessant, dass man mehr über ihn erfahren will.",
-      category: "Creative",
-      difficulty: "Medium",
-      tips: [
-        "Zeige Widersprüche",
-        "Backstory hints",
-        "Konkrete Details",
-        "Motivationen & Ängste"
-      ]
-    }
-  ];
-
-  // Deterministisches Mapping: Datum → Challenge Index
-  const dateStr = date.toISOString().split('T')[0]; // YYYY-MM-DD
-  const dayOfYear = Math.floor((date - new Date(date.getFullYear(), 0, 0)) / 86400000);
-  const index = dayOfYear % challenges.length;
-  
-  return {
-    ...challenges[index],
-    date: dateStr,
-    dayOfYear: dayOfYear,
-    challengeNumber: dayOfYear + 1
-  };
-}
-
-// ========================================
-// ROUTE 1: Get Daily Challenge
-// ========================================
-
-app.post('/api/daily-challenge/get', async (req, res) => {
-  const startTime = Date.now();
-  
-  try {
-    // Hole heutige Challenge
-    const today = new Date();
-    const challenge = getDailyChallengePrompt(today);
-    
-    // Logging
-    console.log('\n=== DAILY CHALLENGE REQUEST ===');
-    console.log('Date:', challenge.date);
-    console.log('Challenge:', challenge.type);
-    console.log('Category:', challenge.category);
-    
-    // Response
     res.json({
       success: true,
-      challenge: challenge,
+      topic: topic.trim(),
+      styles: styles,
       timestamp: new Date().toISOString(),
-      processingTime: Date.now() - startTime
     });
-    
   } catch (error) {
-    console.error('Daily Challenge Error:', error);
+    console.error("Error in prompt-generator:", error);
     res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to get daily challenge',
-      fallback: {
-        type: "Quick Writing",
-        prompt: "Schreibe eine kurze, kreative Antwort auf die Frage: Was würdest du tun, wenn du für einen Tag unbegrenzte Ressourcen hättest?",
-        category: "Creative",
-        difficulty: "Easy",
-        tips: ["Sei kreativ", "Denke groß", "Sei spezifisch"],
-        date: new Date().toISOString().split('T')[0]
-      }
+      error: "Generation failed",
+      message: error.message,
     });
   }
 });
 
-// ========================================
-// ROUTE 2: Submit & Evaluate Solution
-// ========================================
+// ===================================================================
+// FEATURE #3: PROMPT OPTIMIZER
+// ===================================================================
 
-app.post('/api/daily-challenge/submit', async (req, res) => {
-  const startTime = Date.now();
-  
+app.post("/api/prompt-optimizer", async (req, res) => {
   try {
-    const { submission, challengeType, challengePrompt } = req.body;
-    
-    // Validation
-    if (!submission || submission.trim().length < 10) {
+    const { prompt } = req.body;
+
+    if (!prompt || typeof prompt !== "string" || prompt.trim().length === 0) {
       return res.status(400).json({
-        success: false,
-        error: 'Submission zu kurz (min. 10 Zeichen)'
+        error: "Invalid input",
+        message: "Prompt is required and must be a non-empty string",
       });
     }
-    
-    console.log('\n=== CHALLENGE SUBMISSION ===');
-    console.log('Type:', challengeType);
-    console.log('Length:', submission.length, 'chars');
-    
-    // AI Evaluation via Claude
-    const evaluationPrompt = `Du bist ein strenger aber fairer Bewertungs-Bot für kreative Aufgaben.
 
-AUFGABE:
-${challengePrompt}
+    const systemPrompt = `Du bist ein Prompt Engineering Experte. Deine Aufgabe ist es, einen gegebenen Prompt zu analysieren, zu bewerten und zu optimieren.
 
-EINGEREICHTE LÖSUNG:
-${submission}
+Analyse-Kriterien:
+1. Klarheit: Ist der Prompt eindeutig verständlich?
+2. Spezifität: Sind die Anforderungen konkret genug?
+3. Kontext: Ist genug Kontext für eine gute Antwort gegeben?
+4. Struktur: Ist der Prompt gut strukturiert?
+5. Actionability: Ist klar, was das gewünschte Output sein soll?
 
-Bewerte diese Lösung nach folgenden Kriterien:
-1. Relevanz zur Aufgabe (0-25 Punkte)
-2. Kreativität & Originalität (0-25 Punkte)
-3. Qualität & Klarheit (0-25 Punkte)
-4. Impact & Überzeugungskraft (0-25 Punkte)
+Ausgabeformat (EXAKT so formatieren, keine zusätzlichen Zeichen):
+SCORE: [Zahl von 1-10]
+PROBLEMS:
+- [Problem 1]
+- [Problem 2]
+- [Problem 3]
+IMPROVED:
+[Optimierter Prompt hier]
+EXPLANATION:
+[Erklärung warum besser]`;
 
-Gib eine JSON-Antwort in EXAKT diesem Format (keine zusätzlichen Zeichen):
-{
-  "score": 75,
-  "badge": "Silver",
-  "feedback": "Deine Lösung zeigt...",
-  "strengths": ["Punkt 1", "Punkt 2"],
-  "improvements": ["Punkt 1", "Punkt 2"]
-}
+    const userPrompt = `Original Prompt: "${prompt.trim()}"
 
-Regeln:
-- Score: 0-100 (Integer)
-- Badge: "Bronze" (<60), "Silver" (60-79), "Gold" (80-100)
-- Feedback: Max 2 Sätze, konstruktiv
-- Strengths: 2-3 konkrete Stärken
-- Improvements: 2-3 konstruktive Verbesserungsvorschläge
+Analysiere und optimiere diesen Prompt. Gib einen Score (1-10), liste Probleme, erstelle einen verbesserten Prompt und erkläre die Verbesserungen.`;
 
-Sei fair aber anspruchsvoll. Gold gibt es nur für wirklich exzellente Lösungen.`;
+    const response = await callClaude(systemPrompt, userPrompt, 2500);
 
-    // Claude API Call
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
-        max_tokens: 1024,
-        temperature: 0.7,
-        messages: [{
-          role: 'user',
-          content: evaluationPrompt
-        }]
-      })
-    });
+    // Parse die Antwort
+    const scoreMatch = response.match(/SCORE:\s*(\d+)/);
+    const score = scoreMatch ? parseInt(scoreMatch[1]) : 5;
 
-    if (!response.ok) {
-      throw new Error(`Claude API Error: ${response.status}`);
-    }
+    const problemsMatch = response.match(/PROBLEMS:\s*([\s\S]*?)(?=IMPROVED:|$)/);
+    const problemsText = problemsMatch ? problemsMatch[1].trim() : "";
+    const problems = problemsText
+      .split("\n")
+      .filter((line) => line.trim().startsWith("-"))
+      .map((line) => line.replace(/^-\s*/, "").trim())
+      .filter((p) => p.length > 0);
 
-    const data = await response.json();
-    const evaluationText = data.content[0].text;
-    
-    // Parse JSON Response
-    let evaluation;
-    try {
-      // Remove markdown code blocks if present
-      const cleanedText = evaluationText
-        .replace(/```json\n?/g, '')
-        .replace(/```\n?/g, '')
-        .trim();
-      evaluation = JSON.parse(cleanedText);
-    } catch (parseError) {
-      console.error('JSON Parse Error:', parseError);
-      console.log('Raw Response:', evaluationText);
-      
-      // Fallback Evaluation
-      evaluation = {
-        score: 70,
-        badge: "Silver",
-        feedback: "Deine Lösung zeigt Potential! Der AI-Parser hatte Schwierigkeiten, aber deine Bemühung wird geschätzt.",
-        strengths: ["Kreative Herangehensweise", "Gute Grundidee"],
-        improvements: ["Mehr Details", "Klarere Struktur"]
-      };
-    }
-    
-    // Ensure badge matches score
-    if (evaluation.score >= 80) evaluation.badge = "Gold";
-    else if (evaluation.score >= 60) evaluation.badge = "Silver";
-    else evaluation.badge = "Bronze";
-    
-    console.log('Evaluation Score:', evaluation.score);
-    console.log('Badge:', evaluation.badge);
-    console.log('Processing Time:', Date.now() - startTime, 'ms');
-    
-    // Response
+    const improvedMatch = response.match(/IMPROVED:\s*([\s\S]*?)(?=EXPLANATION:|$)/);
+    const improvedPrompt = improvedMatch ? improvedMatch[1].trim() : prompt;
+
+    const explanationMatch = response.match(/EXPLANATION:\s*([\s\S]*?)$/);
+    const explanation = explanationMatch ? explanationMatch[1].trim() : "Verbesserungen wurden vorgenommen.";
+
     res.json({
       success: true,
-      evaluation: evaluation,
-      submission: {
-        text: submission,
-        length: submission.length,
-        timestamp: new Date().toISOString()
+      original: {
+        prompt: prompt.trim(),
+        score: score,
       },
-      processingTime: Date.now() - startTime
+      analysis: {
+        problems: problems.length > 0 ? problems : ["Prompt könnte spezifischer sein"],
+      },
+      improved: {
+        prompt: improvedPrompt,
+        score: Math.min(score + 3, 10),
+        explanation: explanation,
+      },
+      timestamp: new Date().toISOString(),
     });
-    
   } catch (error) {
-    console.error('Submission Evaluation Error:', error);
+    console.error("Error in prompt-optimizer:", error);
     res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to evaluate submission',
-      fallback: {
-        score: 60,
-        badge: "Silver",
-        feedback: "Technischer Fehler bei der Bewertung, aber deine Teilnahme zählt!",
-        strengths: ["Du hast teilgenommen", "Das ist der wichtigste Schritt"],
-        improvements: ["Versuche es morgen wieder"]
-      }
+      error: "Optimization failed",
+      message: error.message,
     });
   }
 });
 
-// ========================================
-// ROUTE 3: Get Leaderboard (Optional)
-// ========================================
+// ===================================================================
+// FEATURE #5: PROMPT LIBRARY
+// ===================================================================
 
-app.get('/api/daily-challenge/leaderboard', async (req, res) => {
+app.get("/api/prompts", (req, res) => {
   try {
-    // Vorerst Mock-Daten, später aus DB
-    // In Produktion würde hier eine DB-Abfrage laufen
-    
-    const mockLeaderboard = [
-      { rank: 1, username: "PromptMaster_42", score: 950, streak: 15, badges: { gold: 8, silver: 5, bronze: 2 } },
-      { rank: 2, username: "AI_Enthusiast", score: 890, streak: 12, badges: { gold: 6, silver: 8, bronze: 4 } },
-      { rank: 3, username: "CreativeWriter", score: 850, streak: 10, badges: { gold: 5, silver: 7, bronze: 3 } },
-      { rank: 4, username: "TechGuru", score: 820, streak: 9, badges: { gold: 4, silver: 9, bronze: 5 } },
-      { rank: 5, username: "StartupFounder", score: 780, streak: 8, badges: { gold: 3, silver: 8, bronze: 6 } }
-    ];
-    
+    const { category, search, featured } = req.query;
+
+    let filteredPrompts = [...FEATURED_PROMPTS];
+
+    // Filter by category
+    if (category && category !== "all") {
+      filteredPrompts = filteredPrompts.filter((p) => p.category === category);
+    }
+
+    // Filter by featured
+    if (featured === "true") {
+      filteredPrompts = filteredPrompts.filter((p) => p.featured === true);
+    }
+
+    // Search in title, prompt, and tags
+    if (search && search.trim().length > 0) {
+      const searchLower = search.toLowerCase().trim();
+      filteredPrompts = filteredPrompts.filter(
+        (p) =>
+          p.title.toLowerCase().includes(searchLower) ||
+          p.prompt.toLowerCase().includes(searchLower) ||
+          p.tags.some((tag) => tag.toLowerCase().includes(searchLower))
+      );
+    }
+
+    // Sort by rating (descending) then by uses (descending)
+    filteredPrompts.sort((a, b) => {
+      if (b.rating !== a.rating) return b.rating - a.rating;
+      return b.uses - a.uses;
+    });
+
     res.json({
       success: true,
-      leaderboard: mockLeaderboard,
-      totalPlayers: 127,
-      lastUpdated: new Date().toISOString()
+      count: filteredPrompts.length,
+      prompts: filteredPrompts,
+      categories: ["all", "creative", "business", "technical", "education", "writing", "ai", "communication", "data", "marketing", "productivity", "design", "innovation"],
+      timestamp: new Date().toISOString(),
     });
-    
   } catch (error) {
-    console.error('Leaderboard Error:', error);
+    console.error("Error in prompts:", error);
     res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to fetch leaderboard'
+      error: "Failed to fetch prompts",
+      message: error.message,
     });
   }
 });
 
-// ========================================
-// Export für Testing
-// ========================================
-// (Falls du Unit Tests schreibst)
-module.exports = {
-  getDailyChallengePrompt
-};
+// Get single prompt by ID
+app.get("/api/prompts/:id", (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const prompt = FEATURED_PROMPTS.find((p) => p.id === id);
 
-// ==================== ERROR HANDLERS ====================
+    if (!prompt) {
+      return res.status(404).json({
+        error: "Not found",
+        message: `Prompt with ID ${id} not found`,
+      });
+    }
 
-// 404 Handler
-app.use((req, res) => {
-  console.log('[404] Route not found:', req.method, req.path);
-  res.status(404).json({
-    error: 'not_found',
-    message: `Route ${req.method} ${req.path} not found`,
-    availableEndpoints: [
-      'GET /',
-      'GET /health',
-      'GET /api/self',
-      'GET /api/spark/today',
-      'GET /api/news',
-      'GET /api/tips',
-      'POST /api/complete',
-      'POST /api/prompt-generator',
-      'POST /api/prompt-optimizer',
-      'POST /api/model-battle',
-      'POST /api/model-battle/vote',
-      'GET /api/model-battle/leaderboard',
-      'POST /api/daily-challenge/get',
-      'POST /api/daily-challenge/submit',
-      'GET /api/daily-challenge/leaderboard'
-    ],
-    timestamp: new Date().toISOString()
-  });
+    res.json({
+      success: true,
+      prompt: prompt,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Error fetching prompt:", error);
+    res.status(500).json({
+      error: "Failed to fetch prompt",
+      message: error.message,
+    });
+  }
 });
 
-// Error Handler
-app.use((err, req, res, next) => {
-  console.error('[ERROR]', err);
-  res.status(500).json({
-    error: 'internal_server_error',
-    message: err.message,
-    timestamp: new Date().toISOString()
-  });
-});
+// ===================================================================
+// START SERVER
+// ===================================================================
 
-// ==================== START SERVER ====================
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log('\n🚀 hohl.rocks Backend v3.0.0');
-  console.log(`📡 Listening on 0.0.0.0:${PORT}`);
-  console.log(`🌐 Environment: ${NODE_ENV}`);
-  console.log(`✅ CORS enabled for: ${ALLOWED_ORIGINS.join(', ')}`);
-  console.log('\n🤖 LLM Status:');
-  console.log(`  - OpenAI: ${hasOpenAI ? '✅ Ready' : '❌ Not configured'}`);
-  console.log(`  - Anthropic: ${hasAnthropic ? '✅ Ready' : '❌ Not configured'}`);
-  console.log(`  - OpenRouter: ${hasOpenRouter ? '✅ Ready' : '❌ Not configured'}`);
-  console.log(`  - Perplexity: ${hasPerplexity ? '✅ Ready' : '❌ Not configured'}`);
-  console.log('\n📋 Available Endpoints:');
-  console.log('  GET  /');
-  console.log('  GET  /health');
-  console.log('  GET  /api/self');
-  console.log('  GET  /api/spark/today (🤖 Dynamic with LLM)');
-  console.log('  GET  /api/news?limit=10&source=OpenAI');
-  console.log('  GET  /api/tips');
-  console.log('  POST /api/complete (🤖 LLM Completion)');
-  console.log('  POST /api/prompt-generator (✨ Feature #1)');
-  console.log('  POST /api/prompt-optimizer (⚡ Feature #3)');
-  console.log('  POST /api/model-battle (🥊 Feature #2: SSE Stream)');
-  console.log('  POST /api/model-battle/vote (👍 Vote System)');
-  console.log('  GET  /api/model-battle/leaderboard (🏆 Leaderboard)');
-  console.log('  POST /api/daily-challenge/get (🎮 Feature #4: Daily Challenge)');
-  console.log('  POST /api/daily-challenge/submit (🚀 Submit & Evaluate)');
-  console.log('  GET  /api/daily-challenge/leaderboard (🏅 Challenge Leaderboard)');
-  console.log('\n✨ Backend ready! 4/5 Features active!\n');
-});
-
-// Graceful Shutdown
-process.on('SIGTERM', () => {
-  console.log('\n[SHUTDOWN] SIGTERM received, shutting down gracefully...');
-  server.close(() => {
-    console.log('[SHUTDOWN] Server closed');
-    process.exit(0);
-  });
-});
-
-process.on('SIGINT', () => {
-  console.log('\n[SHUTDOWN] SIGINT received, shutting down gracefully...');
-  server.close(() => {
-    console.log('[SHUTDOWN] Server closed');
-    process.exit(0);
-  });
+app.listen(PORT, () => {
+  console.log(`\n🚀 hohl.rocks backend running on port ${PORT}`);
+  console.log(`📍 Environment: ${process.env.NODE_ENV || "development"}`);
+  console.log(`🤖 Claude Model: ${MODEL}`);
+  console.log(`📚 Featured Prompts: ${FEATURED_PROMPTS.length}`);
+  console.log(`✨ Features: Prompt Generator + Optimizer + Library\n`);
 });
