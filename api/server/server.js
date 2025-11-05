@@ -1,346 +1,221 @@
-// api/server/server.js
-import express from 'express';
-import cors from 'cors';
-import helmet from 'helmet';
-import morgan from 'morgan';
-import compression from 'compression';
-import { completeText, streamText } from './share.llm.js';
-import { TOP_PROMPTS } from './prompts.js';
-import { getNews } from './news.js';
-import { getTips } from './tips.js';
+// server.js - Minimales Backend für hohl.rocks
+// Deploy auf Railway: https://railway.app/
 
-// In-memory caches
-const newsCache = { items: [], fetched: 0 };
-const tipsCache = { items: [], fetched: 0 };
-
-async function fetchNews() {
-  try { const items = await getNews(); return Array.isArray(items) ? items : []; }
-  catch (err) { console.error('[news] fetch failed', err); return []; }
-}
-async function fetchTips() {
-  try { const items = await getTips(); return Array.isArray(items) ? items : []; }
-  catch (err) { console.error('[tips] fetch failed', err); return []; }
-}
-
-// -------- Replicate helpers (image, analyze, music) --------
-async function runReplicate(version, input) {
-  const token = process.env.REPLICATE_API_TOKEN;
-  if (!token) throw new Error('replicate_token_missing');
-  const create = await fetch('https://api.replicate.com/v1/predictions', {
-    method: 'POST',
-    headers: { 'Authorization': `Token ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ version, input })
-  });
-  if (!create.ok) throw new Error('replicate_create_failed');
-  const prediction = await create.json();
-  const statusUrl = prediction?.urls?.get;
-  if (!statusUrl) return prediction;
-  let status = prediction.status, result = prediction;
-  while (status !== 'succeeded' && status !== 'failed' && status !== 'canceled') {
-    await new Promise(r => setTimeout(r, 2000));
-    const res = await fetch(statusUrl, { headers: { 'Authorization': `Token ${token}` } });
-    result = await res.json(); status = result.status;
-  }
-  return result;
-}
-async function generateImage(prompt) {
-  const version = process.env.REPLICATE_MODEL_VERSION || 'black-forest-labs/flux-1.1-pro';
-  const prediction = await runReplicate(version, { prompt });
-  const output = prediction?.output;
-  if (Array.isArray(output) && output.length > 0) return output[0];
-  if (typeof output === 'string') return output;
-  return null;
-}
-async function analyzeImage(imageData) {
-  const version = process.env.REPLICATE_LLAVA_VERSION || 'liuhaotian/llava-13b';
-  const prediction = await runReplicate(version, { image: imageData });
-  const output = prediction?.output;
-  if (Array.isArray(output) && output.length > 0) return String(output[0]);
-  if (typeof output === 'string') return output;
-  return 'Keine Beschreibung.';
-}
-async function generateMusic(prompt) {
-  const version = process.env.REPLICATE_MUSICGEN_VERSION || 'facebook/musicgen';
-  const prediction = await runReplicate(version, { prompt });
-  const output = prediction?.output;
-  if (Array.isArray(output) && output.length > 0) return output[0];
-  if (typeof output === 'string') return output;
-  return null;
-}
-
+const express = require('express');
+const cors = require('cors');
 const app = express();
-const PORT = process.env.PORT || 8080;
 
-app.set('trust proxy', 1);
-app.use(helmet({ crossOriginResourcePolicy: false }));
-app.use(cors({
-  origin: (origin, cb) => {
-    const allow = (process.env.CORS_ALLOWLIST || '').split(',').map(s => s.trim()).filter(Boolean);
-    if (!origin) return cb(null, true);
-    if (allow.length === 0) return cb(null, true);
-    cb(null, allow.includes(origin));
-  }
+// Environment Variables
+const PORT = process.env.PORT || 3000;
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://hohl.rocks';
+
+// Middleware
+app.use(cors({ 
+  origin: [ALLOWED_ORIGIN, 'http://localhost:3000', 'http://127.0.0.1:3000'],
+  credentials: true 
 }));
-app.use(express.json({ limit: '1mb' }));
-app.use(morgan('tiny'));
-app.use(compression());
+app.use(express.json());
 
-// Health
-app.get('/healthz', (_req, res) => res.json({ ok: true }));
-app.get('/readyz', (_req, res) => res.json({ ok: !!process.env.TAVILY_API_KEY }));
-
-// ---------- Optional: Today’s Spark Route registrieren ----------
-(async () => {
-  try {
-    const mod = await import('./services/spark.route.js');
-    const register = mod?.register || mod?.default?.register;
-    if (typeof register === 'function') {
-      register(app);
-      console.log('[spark] route registered at /api/spark/today');
-    } else {
-      console.log('[spark] register() not found – skipping');
-    }
-  } catch {
-    console.log('[spark] optional route not installed – skipping');
-  }
-})();
-
-// ---------- Helpers for Bubble Prompts ----------
-function parseBubbleEnvelope(input){
-  const m = input.match(/^\[Bubble\s+(\d+)\s*\|[^\]]*\]\s*([\s\S]*)$/);
-  if (!m) return null;
-  const id = parseInt(m[1], 10);
-  let j = {}; try { j = JSON.parse(m[2] || '{}'); } catch { j = {}; }
-  const payload = j.payload || {};
-  const thread = Array.isArray(j.thread) ? j.thread : [];
-  return { id, payload, thread };
-}
-function mergePrompt(tpl, payload){
-  let out = String(tpl||'');
-  const keys = Object.keys(payload||{});
-  for (const k of keys){
-    const v = payload[k];
-    if (v && typeof v === 'object' && v.data){
-      out = out.replaceAll(`[${k}]`, `(Datei: ${v.name||'ohne Namen'}, Typ: ${v.type||'unbekannt'})`);
-    } else {
-      out = out.replaceAll(`[${k}]`, String(v));
-    }
-  }
-  if (/\:\s*$/.test(out) && keys.length){
-    const textKey = keys.find(k => typeof payload[k] === 'string');
-    if (textKey) out += payload[textKey];
-  }
-  return out;
-}
-function buildUserPromptFromBubble(envelope){
-  const base = TOP_PROMPTS.find(p => String(p.id) === String(envelope.id));
-  if (!base) return null;
-  return mergePrompt(base.prompt, envelope.payload);
-}
-
-// ------------- NEWS/TIPS endpoints -------------
-app.get('/api/news', async (_req, res) => {
-  const ttlHours = parseInt(process.env.NEWS_TTL_HOURS || '24', 10);
-  if (!Array.isArray(newsCache.items) || (Date.now() - newsCache.fetched) > ttlHours * 3600 * 1000) {
-    newsCache.items = await fetchNews();
-    newsCache.fetched = Date.now();
-  }
-  res.json({ items: newsCache.items || [] });
+// Logging Middleware
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  next();
 });
 
-app.get('/api/news/search', async (req, res) => {
-  const q = String(req.query?.q || req.query?.query || '').trim();
-  if (!q) return res.status(400).json({ ok: false, error: 'missing_query' });
-  try {
-    const { searchNews } = await import('./news.js');
-    const items = await searchNews(q);
-    res.json({ items: Array.isArray(items) ? items : [] });
-  } catch (err) {
-    console.error('[news/search] search failed', err);
-    res.status(500).json({ ok: false, error: 'search_failed' });
+// Health Check
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// API: Self-Check
+app.get('/api/self', (req, res) => {
+  res.json({
+    ok: true,
+    version: '1.0.0',
+    timestamp: new Date().toISOString(),
+    ui: {
+      modalShade: 0.6,
+      removeNavSound: false
+    },
+    life: {
+      extendClick: 2000,
+      maxExtends: 3
+    },
+    backend: 'railway',
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
+
+// API: Today's Spark (Daily Tip)
+const sparkTips = [
+  {
+    title: 'KI-Prompt Basics',
+    text: 'Strukturierte Prompts mit Rolle, Ziel und Format führen zu besseren Ergebnissen.'
+  },
+  {
+    title: 'Claude Best Practice',
+    text: 'Nutze Beispiele in deinen Prompts – Claude lernt schnell von konkreten Cases.'
+  },
+  {
+    title: 'Token-Optimierung',
+    text: 'Spare Kosten durch klare, präzise Prompts statt langer, verschachtelter Anweisungen.'
+  },
+  {
+    title: 'Context Windows',
+    text: 'Nutze die vollen 200k Token von Claude für umfassende Analysen und Dokumentationen.'
+  },
+  {
+    title: 'Iteratives Prompting',
+    text: 'Arbeite in Phasen: Erst Ideensammlung, dann Auswahl, dann Feinschliff.'
+  },
+  {
+    title: 'DSGVO & KI',
+    text: 'Datensparsamkeit, Pseudonymisierung und EU-Anbieter sind die drei Säulen.'
+  },
+  {
+    title: 'RAG-Systeme',
+    text: 'Retrieval-Augmented Generation ermöglicht KI mit eigenem Wissensarchiv.'
   }
+];
+
+app.get('/api/spark/today', (req, res) => {
+  // Deterministischer Index basierend auf Datum
+  const today = new Date();
+  const dayIndex = today.getDate() % sparkTips.length;
+  const tip = sparkTips[dayIndex];
+  
+  res.json({
+    title: tip.title,
+    text: tip.text,
+    date: today.toISOString().split('T')[0]
+  });
 });
 
-app.get('/api/tips', async (_req, res) => {
-  const ttlHours = parseInt(process.env.TIPS_TTL_HOURS || '24', 10);
-  if (!Array.isArray(tipsCache.items) || (Date.now() - tipsCache.fetched) > ttlHours * 3600 * 1000) {
-    tipsCache.items = await fetchTips();
-    tipsCache.fetched = Date.now();
+// API: News Feed
+const newsItems = [
+  {
+    title: 'EU AI Act – Neue Regelungen ab 2024',
+    url: 'https://digital-strategy.ec.europa.eu/en/policies/european-ai-act',
+    summary: 'Die EU führt umfassende Regelungen für KI-Systeme ein. Unternehmen müssen Risikostufen bewerten und Transparenzpflichten erfüllen.',
+    source: 'EU Commission',
+    date: '2024-10-15'
+  },
+  {
+    title: 'OpenAI stellt GPT-5 vor',
+    url: 'https://openai.com/blog',
+    summary: 'Neue Multimodal-Fähigkeiten und verbesserte Reasoning-Kapazitäten charakterisieren die nächste Generation.',
+    source: 'OpenAI',
+    date: '2024-11-01'
+  },
+  {
+    title: 'Claude 3.5 Sonnet Update',
+    url: 'https://anthropic.com/news',
+    summary: 'Anthropic verbessert die Coding-Fähigkeiten und führt neue Safety-Features ein.',
+    source: 'Anthropic',
+    date: '2024-10-28'
+  },
+  {
+    title: 'Google Gemini 2.0 Release',
+    url: 'https://deepmind.google/technologies/gemini/',
+    summary: 'Erweiterte Context-Windows und native Tool-Verwendung machen Gemini zum Konkurrenten.',
+    source: 'Google DeepMind',
+    date: '2024-11-03'
   }
-  res.json({ items: tipsCache.items || [] });
-});
+];
 
-// Simple metrics endpoint
-app.post('/api/metrics', (req, res) => {
-  try {
-    const { type = 'unknown', ...meta } = req.body || {};
-    console.log(JSON.stringify({ level: 'info', app: 'hohl.rocks-back', event: 'metrics', type, meta }));
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('[metrics]', e);
-    res.status(500).json({ ok: false, error: 'metrics_failed' });
+app.get('/api/news', (req, res) => {
+  // Query-Parameter für Filterung
+  const { limit = 10, source } = req.query;
+  
+  let filtered = newsItems;
+  if (source) {
+    filtered = filtered.filter(item => 
+      item.source.toLowerCase().includes(source.toLowerCase())
+    );
   }
+  
+  res.json({
+    items: filtered.slice(0, parseInt(limit)),
+    total: filtered.length,
+    timestamp: new Date().toISOString()
+  });
 });
 
-// ------------- RUN: text + stream -------------
-app.post('/api/run', async (req, res) => {
-  try{
-    const raw = (req.body?.input || '').toString().trim();
-    const euOnly = String(req.query?.eu || req.body?.eu || process.env.EU_ONLY) === '1';
-    const bubble = parseBubbleEnvelope(raw);
-    const system = 'Du bist ein prägnanter, hilfreicher Assistent. Antworte auf Deutsch, kurz und konkret.';
-    if (bubble && typeof bubble.id === 'number') {
-      const id = bubble.id;
-      if (id === 18) {
-        const desc = String(bubble.payload?.BESCHREIBUNG || '').trim();
-        if (!desc) return res.status(400).json({ ok:false, error:'missing_input' });
-        try {
-          const imageUrl = await generateImage(desc);
-          if (imageUrl) return res.json({ ok: true, result: `__HTML__<img src="${imageUrl}" alt="AI Bild" />` });
-          return res.json({ ok: true, result: 'Keine Antwort.' });
-        } catch (err) {
-          console.error('[bubble18]', err);
-          return res.status(500).json({ ok:false, error:'image_failed' });
-        }
-      }
-      if (id === 19) {
-        const data = bubble.payload?.BILD?.data;
-        if (!data) return res.status(400).json({ ok:false, error:'missing_image' });
-        try {
-          const description = await analyzeImage(data);
-          return res.json({ ok: true, result: description || 'Keine Antwort.' });
-        } catch (err) {
-          console.error('[bubble19]', err);
-          return res.status(500).json({ ok:false, error:'image_analyze_failed' });
-        }
-      }
-      if (id === 20) {
-        const ans = String(bubble.payload?.ANTWORT || '').trim().toLowerCase();
-        if (['ja','j','yes','y','1','true'].includes(ans)) {
-          const joke = await completeText('Erzähle einen kurzen KI-bezogenen Witz.', { system, euOnly });
-          return res.json({ ok:true, result: joke || 'Keine Antwort.' });
-        } else {
-          return res.json({ ok:true, result: 'Alles klar, vielleicht später.' });
-        }
-      }
-      if (id === 21) {
-        const desc = String(bubble.payload?.BESCHREIBUNG || '').trim();
-        if (!desc) return res.status(400).json({ ok:false, error:'missing_input' });
-        try {
-          const audioUrl = await generateMusic(desc);
-          if (audioUrl) return res.json({ ok:true, result: `__HTML__<audio controls src="${audioUrl}"></audio>` });
-          return res.json({ ok:true, result: 'Keine Antwort.' });
-        } catch (err) {
-          console.error('[bubble21]', err);
-          return res.status(500).json({ ok:false, error:'music_failed' });
-        }
-      }
-    }
-    const userPrompt = bubble ? buildUserPromptFromBubble(bubble) : raw;
-    if (!userPrompt) return res.status(400).json({ ok:false, error:'missing_input' });
-    const text = await completeText(userPrompt, { system, euOnly });
-    res.json({ ok:true, result:text });
-  } catch(e){ console.error('[run]', e); res.status(500).json({ ok:false, error:'run_failed' }); }
+// API: Tips
+const tips = [
+  {
+    id: 'prompt-basics',
+    title: 'AI Prompt Engineering Basics',
+    category: 'Praxis',
+    problem: 'Unklare Prompts liefern unzuverlässige Ergebnisse.',
+    solution: 'Nutze Rollen, Ziel, Format und Qualitätskriterien. Baue Beispiele ein.',
+    prompt: 'Rolle: Du bist ein präziser technischer Redakteur.\nZiel: Erkläre [Thema] verständlich für Einsteiger.\nFormat: Überschrift, 3 Bulletpoints, 1 Beispiel.\nQualität: Korrigiere Fachfehler, nenne Quellenideen.',
+    tags: ['Prompting', 'Best Practice']
+  },
+  {
+    id: 'claude-best',
+    title: 'Claude 3.5 Sonnet Best Practices',
+    category: 'Effizienz',
+    problem: 'Sonnet liefert viel Text, aber nicht die gewünschte Struktur.',
+    solution: 'Definiere strukturierte Ausgaben (JSON/Markdown) und nutze Follow-up-Refinement.',
+    prompt: 'Du bist ein strukturierter KI-Analyst. Erzeuge eine Markdown-Checkliste zu [Aufgabe] mit: Ziel, Schritte, Risiken, Zeitbedarf.',
+    tags: ['Claude', 'Struktur']
+  },
+  {
+    id: 'eu-ai-act',
+    title: 'EU AI Act – Was Sie wissen müssen',
+    category: 'Compliance',
+    problem: 'Neue Pflichten für KI-Anbieter sind unklar.',
+    solution: 'Stufe eigene Systeme ein (Risiko-Level), implementiere Transparenz, dokumentiere Tests.',
+    prompt: 'Fasse die Pflichten für [Use Case] nach EU AI Act zusammen (5 Punkte), inkl. Risikostufe & To-do-Liste.',
+    tags: ['Regulierung', 'Legal']
+  }
+];
+
+app.get('/api/tips', (req, res) => {
+  res.json({
+    items: tips,
+    total: tips.length,
+    timestamp: new Date().toISOString()
+  });
 });
 
-app.get('/api/run/stream', async (req, res) => {
-  try{
-    const raw = (req.query?.q || '').toString().trim();
-    const euOnly = String(req.query?.eu || process.env.EU_ONLY) === '1';
-    const bubble = parseBubbleEnvelope(raw);
-    const system = 'Du bist ein prägnanter, hilfreicher Assistent. Antworte auf Deutsch, kurz und konkret.';
-    if (bubble && typeof bubble.id === 'number') {
-      const id = bubble.id;
-      if (id === 18) {
-        const desc = String(bubble.payload?.BESCHREIBUNG || '').trim();
-        if (!desc){ res.writeHead(400); return res.end('missing description'); }
-        try {
-          const url = await generateImage(desc);
-          res.writeHead(200, { 'Content-Type':'text/event-stream','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','Access-Control-Allow-Origin':'*' });
-          res.write(`data: ${url ? `__HTML__<img src=\"${url}\" alt=\"AI Bild\" />` : 'Keine Antwort.'}\n\n`);
-          res.write('data: [DONE]\n\n');
-          return res.end();
-        } catch (err) {
-          console.error('[stream bubble18]', err);
-          res.writeHead(500); return res.end('image_failed');
-        }
-      }
-      if (id === 19) {
-        const data = bubble.payload?.BILD?.data;
-        if (!data){ res.writeHead(400); return res.end('missing image'); }
-        try {
-          const description = await analyzeImage(data);
-          res.writeHead(200, { 'Content-Type':'text/event-stream','Cache-Control':'no-cache, no transform','Connection':'keep-alive','Access-Control-Allow-Origin':'*' });
-          res.write(`data: ${description || 'Keine Antwort.'}\n\n`);
-          res.write('data: [DONE]\n\n');
-          return res.end();
-        } catch (err) {
-          console.error('[stream bubble19]', err);
-          res.writeHead(500); return res.end('image_analyze_failed');
-        }
-      }
-      if (id === 20) {
-        const ans = String(bubble.payload?.ANTWORT || '').trim().toLowerCase();
-        res.writeHead(200, { 'Content-Type':'text/event-stream','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','Access-Control-Allow-Origin':'*' });
-        if (['ja','j','yes','y','1','true'].includes(ans)) {
-          const joke = await completeText('Erzähle einen kurzen KI-bezogenen Witz.', { system, euOnly });
-          res.write(`data: ${joke || 'Keine Antwort.'}\n\n`);
-        } else {
-          res.write('data: Alles klar, vielleicht später.\n\n');
-        }
-        res.write('data: [DONE]\n\n');
-        return res.end();
-      }
-      if (id === 21) {
-        const desc = String(bubble.payload?.BESCHREIBUNG || '').trim();
-        if (!desc){ res.writeHead(400); return res.end('missing description'); }
-        try {
-          const url = await generateMusic(desc);
-          res.writeHead(200, { 'Content-Type':'text/event-stream','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','Access-Control-Allow-Origin':'*' });
-          res.write(`data: ${url ? `__HTML__<audio controls src=\"${url}\"></audio>` : 'Keine Antwort.'}\n\n`);
-          res.write('data: [DONE]\n\n');
-          return res.end();
-        } catch (err) {
-          console.error('[stream bubble21]', err);
-          res.writeHead(500); return res.end('music_failed');
-        }
-      }
-    }
-    const userPrompt = bubble ? buildUserPromptFromBubble(bubble) : raw;
-    if (!userPrompt){ res.writeHead(400); return res.end('missing q'); }
-    res.writeHead(200, { 'Content-Type':'text/event-stream','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','Access-Control-Allow-Origin':'*' });
-    await streamText(userPrompt, { system, euOnly }, (tok)=> res.write(`data: ${tok}\n\n`));
-    res.write('data: [DONE]\n\n'); res.end();
-  } catch(e){ console.error('[run/stream]', e); try{ res.write('data: [ERROR]\n\n'); res.end(); } catch{} }
+// 404 Handler
+app.use((req, res) => {
+  res.status(404).json({
+    error: 'not_found',
+    message: `Route ${req.method} ${req.path} not found`,
+    timestamp: new Date().toISOString()
+  });
 });
 
-// Alias /_api
-app.use('/_api', (req,res,next)=>{ req.url = req.originalUrl.replace(/^\/_api/, '/api'); next(); }, app._router);
+// Error Handler
+app.use((err, req, res, next) => {
+  console.error('Error:', err);
+  res.status(500).json({
+    error: 'internal_server_error',
+    message: err.message,
+    timestamp: new Date().toISOString()
+  });
+});
 
-// 404
-app.use((_req,res)=> res.status(404).json({ ok:false, error:'not_found' }));
+// Start Server
+app.listen(PORT, () => {
+  console.log('🚀 hohl.rocks Backend');
+  console.log(`📡 Listening on port ${PORT}`);
+  console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`✅ CORS enabled for: ${ALLOWED_ORIGIN}`);
+  console.log('\n📋 Available Endpoints:');
+  console.log('  GET  /health');
+  console.log('  GET  /api/self');
+  console.log('  GET  /api/spark/today');
+  console.log('  GET  /api/news?limit=10&source=OpenAI');
+  console.log('  GET  /api/tips');
+  console.log('\n✨ Backend ready!\n');
+});
 
-app.listen(PORT, ()=> console.log(`[hohl.rocks-back] :${PORT}`));
-
-// Prefetch
-async function prefetchAll() {
-  try {
-    const items = await fetchNews();
-    if (Array.isArray(items) && items.length) {
-      newsCache.items = items; newsCache.fetched = Date.now();
-      console.log('[Prefetch] Loaded', items.length, 'news items');
-    }
-  } catch (err) { console.error('[Prefetch] News prefetch error', err); }
-  try {
-    const items = await fetchTips();
-    if (Array.isArray(items) && items.length) {
-      tipsCache.items = items; tipsCache.fetched = Date.now();
-      console.log('[Prefetch] Loaded', items.length, 'tips');
-    }
-  } catch (err) { console.error('[Prefetch] Tips prefetch error', err); }
-}
-prefetchAll().catch(err => console.error('[Prefetch] Startup error', err));
-const newsTTL = parseInt(process.env.NEWS_TTL_HOURS, 10) || 24;
-const tipsTTL = parseInt(process.env.TIPS_TTL_HOURS, 10) || 24;
-const intervalHours = Math.max(newsTTL, tipsTTL);
-setInterval(() => { prefetchAll().catch(err => console.error('[Prefetch] Scheduled error', err)); }, Math.max(intervalHours, 1) * 60 * 60 * 1000);
+// Graceful Shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully...');
+  process.exit(0);
+});
