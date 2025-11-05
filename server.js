@@ -199,7 +199,10 @@ app.get('/', (req, res) => {
       'POST /api/prompt-optimizer',
       'POST /api/model-battle (SSE)',
       'POST /api/model-battle/vote',
-      'GET /api/model-battle/leaderboard'
+      'GET /api/model-battle/leaderboard',
+      'POST /api/daily-challenge/get',
+      'POST /api/daily-challenge/submit',
+      'GET /api/daily-challenge/leaderboard'
     ]
   });
 });
@@ -1088,6 +1091,336 @@ app.get('/api/model-battle/leaderboard', (req, res) => {
   });
 });
 
+
+// ========================================
+// FEATURE #4: DAILY AI CHALLENGE 🎮
+// ========================================
+function getDailyChallengePrompt(date) {
+  const challenges = [
+    {
+      type: "Elevator Pitch",
+      prompt: "Schreibe einen 60-Sekunden Elevator Pitch für ein innovatives Startup-Konzept deiner Wahl. Erkläre das Problem, die Lösung und den einzigartigen Wert.",
+      category: "Business",
+      difficulty: "Medium",
+      tips: [
+        "Starte mit einem Hook",
+        "Erkläre das Problem klar",
+        "Präsentiere deine Lösung",
+        "Zeige den Markt/das Potenzial"
+      ]
+    },
+    {
+      type: "Product Description",
+      prompt: "Erstelle eine überzeugende Produktbeschreibung für ein alltägliches Objekt, als wäre es eine bahnbrechende Innovation. Mache das Gewöhnliche außergewöhnlich.",
+      category: "Marketing",
+      difficulty: "Easy",
+      tips: [
+        "Nutze sensorische Details",
+        "Betone einzigartige Features",
+        "Spreche Emotionen an",
+        "Schaffe Dringlichkeit"
+      ]
+    },
+    {
+      type: "Technical Explainer",
+      prompt: "Erkläre ein komplexes technisches Konzept (wie Blockchain, Quantencomputing oder KI) so, dass es ein 10-Jähriger versteht. Nutze Analogien und einfache Sprache.",
+      category: "Education",
+      difficulty: "Hard",
+      tips: [
+        "Verwende Alltags-Analogien",
+        "Vermeide Fachjargon",
+        "Nutze konkrete Beispiele",
+        "Baue logisch aufeinander auf"
+      ]
+    },
+    {
+      type: "Story Opening",
+      prompt: "Schreibe die ersten 3 Sätze einer fesselnden Kurzgeschichte. Der Leser muss sofort weiterlesen wollen. Jedes Genre ist erlaubt.",
+      category: "Creative",
+      difficulty: "Medium",
+      tips: [
+        "Starte mit einem Hook",
+        "Schaffe Atmosphäre",
+        "Werfe Fragen auf",
+        "Zeige, erzähle nicht nur"
+      ]
+    },
+    {
+      type: "Social Media Post",
+      prompt: "Erstelle einen viralen Social Media Post (max. 280 Zeichen) über ein aktuelles Trend-Thema. Der Post muss Engagement erzeugen: Likes, Comments, Shares.",
+      category: "Marketing",
+      difficulty: "Easy",
+      tips: [
+        "Sei kontrovers oder überraschend",
+        "Nutze einen klaren Call-to-Action",
+        "Emotionen > Fakten",
+        "Frage die Community"
+      ]
+    },
+    {
+      type: "Problem Solution",
+      prompt: "Identifiziere ein alltägliches Problem in deiner Stadt/Region und präsentiere eine kreative, umsetzbare Lösung in 150 Wörtern.",
+      category: "Business",
+      difficulty: "Medium",
+      tips: [
+        "Problem klar definieren",
+        "Lösung konkret beschreiben",
+        "Machbarkeit zeigen",
+        "Impact darstellen"
+      ]
+    },
+    {
+      type: "Character Bio",
+      prompt: "Erstelle eine detaillierte Biografie für einen fiktiven Charakter (200 Wörter). Mache ihn so real und interessant, dass man mehr über ihn erfahren will.",
+      category: "Creative",
+      difficulty: "Medium",
+      tips: [
+        "Zeige Widersprüche",
+        "Backstory hints",
+        "Konkrete Details",
+        "Motivationen & Ängste"
+      ]
+    }
+  ];
+
+  // Deterministisches Mapping: Datum → Challenge Index
+  const dateStr = date.toISOString().split('T')[0]; // YYYY-MM-DD
+  const dayOfYear = Math.floor((date - new Date(date.getFullYear(), 0, 0)) / 86400000);
+  const index = dayOfYear % challenges.length;
+  
+  return {
+    ...challenges[index],
+    date: dateStr,
+    dayOfYear: dayOfYear,
+    challengeNumber: dayOfYear + 1
+  };
+}
+
+// ========================================
+// ROUTE 1: Get Daily Challenge
+// ========================================
+
+app.post('/api/daily-challenge/get', async (req, res) => {
+  const startTime = Date.now();
+  
+  try {
+    // Hole heutige Challenge
+    const today = new Date();
+    const challenge = getDailyChallengePrompt(today);
+    
+    // Logging
+    console.log('\n=== DAILY CHALLENGE REQUEST ===');
+    console.log('Date:', challenge.date);
+    console.log('Challenge:', challenge.type);
+    console.log('Category:', challenge.category);
+    
+    // Response
+    res.json({
+      success: true,
+      challenge: challenge,
+      timestamp: new Date().toISOString(),
+      processingTime: Date.now() - startTime
+    });
+    
+  } catch (error) {
+    console.error('Daily Challenge Error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to get daily challenge',
+      fallback: {
+        type: "Quick Writing",
+        prompt: "Schreibe eine kurze, kreative Antwort auf die Frage: Was würdest du tun, wenn du für einen Tag unbegrenzte Ressourcen hättest?",
+        category: "Creative",
+        difficulty: "Easy",
+        tips: ["Sei kreativ", "Denke groß", "Sei spezifisch"],
+        date: new Date().toISOString().split('T')[0]
+      }
+    });
+  }
+});
+
+// ========================================
+// ROUTE 2: Submit & Evaluate Solution
+// ========================================
+
+app.post('/api/daily-challenge/submit', async (req, res) => {
+  const startTime = Date.now();
+  
+  try {
+    const { submission, challengeType, challengePrompt } = req.body;
+    
+    // Validation
+    if (!submission || submission.trim().length < 10) {
+      return res.status(400).json({
+        success: false,
+        error: 'Submission zu kurz (min. 10 Zeichen)'
+      });
+    }
+    
+    console.log('\n=== CHALLENGE SUBMISSION ===');
+    console.log('Type:', challengeType);
+    console.log('Length:', submission.length, 'chars');
+    
+    // AI Evaluation via Claude
+    const evaluationPrompt = `Du bist ein strenger aber fairer Bewertungs-Bot für kreative Aufgaben.
+
+AUFGABE:
+${challengePrompt}
+
+EINGEREICHTE LÖSUNG:
+${submission}
+
+Bewerte diese Lösung nach folgenden Kriterien:
+1. Relevanz zur Aufgabe (0-25 Punkte)
+2. Kreativität & Originalität (0-25 Punkte)
+3. Qualität & Klarheit (0-25 Punkte)
+4. Impact & Überzeugungskraft (0-25 Punkte)
+
+Gib eine JSON-Antwort in EXAKT diesem Format (keine zusätzlichen Zeichen):
+{
+  "score": 75,
+  "badge": "Silver",
+  "feedback": "Deine Lösung zeigt...",
+  "strengths": ["Punkt 1", "Punkt 2"],
+  "improvements": ["Punkt 1", "Punkt 2"]
+}
+
+Regeln:
+- Score: 0-100 (Integer)
+- Badge: "Bronze" (<60), "Silver" (60-79), "Gold" (80-100)
+- Feedback: Max 2 Sätze, konstruktiv
+- Strengths: 2-3 konkrete Stärken
+- Improvements: 2-3 konstruktive Verbesserungsvorschläge
+
+Sei fair aber anspruchsvoll. Gold gibt es nur für wirklich exzellente Lösungen.`;
+
+    // Claude API Call
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
+        max_tokens: 1024,
+        temperature: 0.7,
+        messages: [{
+          role: 'user',
+          content: evaluationPrompt
+        }]
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Claude API Error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const evaluationText = data.content[0].text;
+    
+    // Parse JSON Response
+    let evaluation;
+    try {
+      // Remove markdown code blocks if present
+      const cleanedText = evaluationText
+        .replace(/```json\n?/g, '')
+        .replace(/```\n?/g, '')
+        .trim();
+      evaluation = JSON.parse(cleanedText);
+    } catch (parseError) {
+      console.error('JSON Parse Error:', parseError);
+      console.log('Raw Response:', evaluationText);
+      
+      // Fallback Evaluation
+      evaluation = {
+        score: 70,
+        badge: "Silver",
+        feedback: "Deine Lösung zeigt Potential! Der AI-Parser hatte Schwierigkeiten, aber deine Bemühung wird geschätzt.",
+        strengths: ["Kreative Herangehensweise", "Gute Grundidee"],
+        improvements: ["Mehr Details", "Klarere Struktur"]
+      };
+    }
+    
+    // Ensure badge matches score
+    if (evaluation.score >= 80) evaluation.badge = "Gold";
+    else if (evaluation.score >= 60) evaluation.badge = "Silver";
+    else evaluation.badge = "Bronze";
+    
+    console.log('Evaluation Score:', evaluation.score);
+    console.log('Badge:', evaluation.badge);
+    console.log('Processing Time:', Date.now() - startTime, 'ms');
+    
+    // Response
+    res.json({
+      success: true,
+      evaluation: evaluation,
+      submission: {
+        text: submission,
+        length: submission.length,
+        timestamp: new Date().toISOString()
+      },
+      processingTime: Date.now() - startTime
+    });
+    
+  } catch (error) {
+    console.error('Submission Evaluation Error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to evaluate submission',
+      fallback: {
+        score: 60,
+        badge: "Silver",
+        feedback: "Technischer Fehler bei der Bewertung, aber deine Teilnahme zählt!",
+        strengths: ["Du hast teilgenommen", "Das ist der wichtigste Schritt"],
+        improvements: ["Versuche es morgen wieder"]
+      }
+    });
+  }
+});
+
+// ========================================
+// ROUTE 3: Get Leaderboard (Optional)
+// ========================================
+
+app.get('/api/daily-challenge/leaderboard', async (req, res) => {
+  try {
+    // Vorerst Mock-Daten, später aus DB
+    // In Produktion würde hier eine DB-Abfrage laufen
+    
+    const mockLeaderboard = [
+      { rank: 1, username: "PromptMaster_42", score: 950, streak: 15, badges: { gold: 8, silver: 5, bronze: 2 } },
+      { rank: 2, username: "AI_Enthusiast", score: 890, streak: 12, badges: { gold: 6, silver: 8, bronze: 4 } },
+      { rank: 3, username: "CreativeWriter", score: 850, streak: 10, badges: { gold: 5, silver: 7, bronze: 3 } },
+      { rank: 4, username: "TechGuru", score: 820, streak: 9, badges: { gold: 4, silver: 9, bronze: 5 } },
+      { rank: 5, username: "StartupFounder", score: 780, streak: 8, badges: { gold: 3, silver: 8, bronze: 6 } }
+    ];
+    
+    res.json({
+      success: true,
+      leaderboard: mockLeaderboard,
+      totalPlayers: 127,
+      lastUpdated: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('Leaderboard Error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch leaderboard'
+    });
+  }
+});
+
+// ========================================
+// Export für Testing
+// ========================================
+// (Falls du Unit Tests schreibst)
+module.exports = {
+  getDailyChallengePrompt
+};
+
 // ==================== ERROR HANDLERS ====================
 
 // 404 Handler
@@ -1108,7 +1441,10 @@ app.use((req, res) => {
       'POST /api/prompt-optimizer',
       'POST /api/model-battle',
       'POST /api/model-battle/vote',
-      'GET /api/model-battle/leaderboard'
+      'GET /api/model-battle/leaderboard',
+      'POST /api/daily-challenge/get',
+      'POST /api/daily-challenge/submit',
+      'GET /api/daily-challenge/leaderboard'
     ],
     timestamp: new Date().toISOString()
   });
@@ -1148,7 +1484,10 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log('  POST /api/model-battle (🥊 Feature #2: SSE Stream)');
   console.log('  POST /api/model-battle/vote (👍 Vote System)');
   console.log('  GET  /api/model-battle/leaderboard (🏆 Leaderboard)');
-  console.log('\n✨ Backend ready! 3/5 Features active!\n');
+  console.log('  POST /api/daily-challenge/get (🎮 Feature #4: Daily Challenge)');
+  console.log('  POST /api/daily-challenge/submit (🚀 Submit & Evaluate)');
+  console.log('  GET  /api/daily-challenge/leaderboard (🏅 Challenge Leaderboard)');
+  console.log('\n✨ Backend ready! 4/5 Features active!\n');
 });
 
 // Graceful Shutdown
