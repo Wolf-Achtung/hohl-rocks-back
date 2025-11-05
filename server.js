@@ -1,9 +1,10 @@
 // ===================================================================
 // HOHL.ROCKS BACKEND - Node.js/Express Server
-// Features: Prompt Generator + Optimizer + Library
+// Features: Prompt Generator + Optimizer + Library + Model Battle
 // ===================================================================
 
 import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import express from "express";
 import cors from "cors";
 
@@ -32,14 +33,23 @@ app.use(cors({
 }));
 
 // ===================================================================
-// ANTHROPIC CLIENT
+// API CLIENTS
 // ===================================================================
 
+// Anthropic (Claude)
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
 const MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-4-20250514";
+
+// OpenAI (GPT)
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// Perplexity (via fetch)
+const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
 
 // ===================================================================
 // FEATURED PROMPTS DATABASE (Static for now)
@@ -682,6 +692,170 @@ app.get("/api/prompts/:id", (req, res) => {
 });
 
 // ===================================================================
+// MODEL BATTLE ARENA - Compare 3 AI Models
+// ===================================================================
+
+app.post("/api/model-battle", async (req, res) => {
+  try {
+    const { prompt } = req.body;
+
+    if (!prompt || prompt.trim().length === 0) {
+      return res.status(400).json({ 
+        error: "Prompt is required" 
+      });
+    }
+
+    if (prompt.length > 2000) {
+      return res.status(400).json({ 
+        error: "Prompt too long (max 2000 characters)" 
+      });
+    }
+
+    console.log(`\n⚔️  Model Battle: "${prompt.slice(0, 50)}..."`);
+
+    // Parallel API Calls mit Response Time Tracking
+    const results = await Promise.allSettled([
+      // Claude Sonnet 4
+      (async () => {
+        const startTime = Date.now();
+        try {
+          const message = await anthropic.messages.create({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 1024,
+            messages: [{
+              role: "user",
+              content: prompt
+            }]
+          });
+          
+          return {
+            model: "claude",
+            name: "Claude Sonnet 4",
+            response: message.content[0].text,
+            responseTime: Date.now() - startTime,
+            success: true
+          };
+        } catch (error) {
+          console.error("Claude error:", error.message);
+          return {
+            model: "claude",
+            name: "Claude Sonnet 4",
+            response: "Fehler bei der Anfrage",
+            error: error.message,
+            responseTime: Date.now() - startTime,
+            success: false
+          };
+        }
+      })(),
+
+      // GPT-4o-mini
+      (async () => {
+        const startTime = Date.now();
+        try {
+          const completion = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            max_tokens: 1024,
+            messages: [{
+              role: "user",
+              content: prompt
+            }]
+          });
+          
+          return {
+            model: "gpt",
+            name: "GPT-4o Mini",
+            response: completion.choices[0].message.content,
+            responseTime: Date.now() - startTime,
+            success: true
+          };
+        } catch (error) {
+          console.error("GPT error:", error.message);
+          return {
+            model: "gpt",
+            name: "GPT-4o Mini",
+            response: "Fehler bei der Anfrage",
+            error: error.message,
+            responseTime: Date.now() - startTime,
+            success: false
+          };
+        }
+      })(),
+
+      // Perplexity Sonar Pro
+      (async () => {
+        const startTime = Date.now();
+        try {
+          const response = await fetch("https://api.perplexity.ai/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${PERPLEXITY_API_KEY}`
+            },
+            body: JSON.stringify({
+              model: "sonar-pro",
+              max_tokens: 1024,
+              messages: [{
+                role: "user",
+                content: prompt
+              }]
+            })
+          });
+
+          if (!response.ok) {
+            throw new Error(`Perplexity API error: ${response.status}`);
+          }
+
+          const data = await response.json();
+          
+          return {
+            model: "perplexity",
+            name: "Perplexity Sonar Pro",
+            response: data.choices[0].message.content,
+            responseTime: Date.now() - startTime,
+            success: true
+          };
+        } catch (error) {
+          console.error("Perplexity error:", error.message);
+          return {
+            model: "perplexity",
+            name: "Perplexity Sonar Pro",
+            response: "Fehler bei der Anfrage",
+            error: error.message,
+            responseTime: Date.now() - startTime,
+            success: false
+          };
+        }
+      })()
+    ]);
+
+    // Extract results
+    const responses = results.map(result => 
+      result.status === 'fulfilled' ? result.value : result.reason
+    );
+
+    // Log response times
+    console.log("⏱️  Response Times:");
+    responses.forEach(r => {
+      console.log(`   ${r.name}: ${r.responseTime}ms ${r.success ? '✓' : '✗'}`);
+    });
+
+    res.json({
+      success: true,
+      prompt,
+      responses,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error("Model Battle error:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      message: error.message
+    });
+  }
+});
+
+// ===================================================================
 // START SERVER
 // ===================================================================
 
@@ -690,5 +864,5 @@ app.listen(PORT, () => {
   console.log(`📍 Environment: ${process.env.NODE_ENV || "development"}`);
   console.log(`🤖 Claude Model: ${MODEL}`);
   console.log(`📚 Featured Prompts: ${FEATURED_PROMPTS.length}`);
-  console.log(`✨ Features: Prompt Generator + Optimizer + Library\n`);
+  console.log(`✨ Features: Generator + Optimizer + Library + Model Battle\n`);
 });
