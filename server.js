@@ -1,35 +1,15 @@
 // ===================================================================
 // HOHL.ROCKS BACKEND - Node.js/Express Server
-// Features: Prompt Generator + Optimizer + Library (+ Model Battle wenn OpenAI installiert)
+// Features: Prompt Generator + Optimizer + Library + Model Battle
 // ===================================================================
 
 import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import express from "express";
 import cors from "cors";
 
 const app = express();
 const PORT = process.env.PORT || 8080;
-
-// ===================================================================
-// OPTIONAL OPENAI IMPORT (Crash-Safe)
-// ===================================================================
-
-let openai = null;
-let PERPLEXITY_API_KEY = null;
-let OPENAI_AVAILABLE = false;
-
-try {
-  const OpenAI = (await import("openai")).default;
-  openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-  });
-  PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
-  OPENAI_AVAILABLE = true;
-  console.log("✅ OpenAI SDK loaded - Model Battle enabled!");
-} catch (error) {
-  console.log("⚠️  OpenAI SDK not found - Model Battle disabled");
-  console.log("   Run: npm install openai");
-}
 
 // ===================================================================
 // MIDDLEWARE
@@ -62,6 +42,14 @@ const anthropic = new Anthropic({
 });
 
 const MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-4-20250514";
+
+// OpenAI (GPT)
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// Perplexity (via fetch)
+const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
 
 // ===================================================================
 // FEATURED PROMPTS DATABASE (Static for now)
@@ -120,534 +108,555 @@ const FEATURED_PROMPTS = [
     title: "ROI Calculator Builder",
     prompt: "Entwickle eine ROI-Kalkulation für [LÖSUNG/SERVICE] die in 3 Schritten zeigt: 1) Current State Costs (was kostet das Problem jetzt?), 2) Implementation Investment (einmalig + laufend), 3) Expected Savings/Revenue (konservativ, realistisch, optimistisch). Baue eine Excel-Formel-Struktur die der Kunde selbst anpassen kann.",
     category: "business",
-    tags: ["roi", "sales", "consulting"],
-    rating: 4.8,
-    uses: 1456,
+    tags: ["roi", "sales", "b2b"],
+    rating: 4.6,
+    uses: 723,
     author: "hohl.rocks",
     featured: true
   },
   {
     id: 6,
-    title: "Meeting Minutes Master",
-    prompt: "Erstelle aus [MEETING-NOTIZEN] ein strukturiertes Meeting Protocol mit: 1) Decisions Made (was wurde entschieden?), 2) Action Items (wer macht was bis wann?), 3) Parking Lot (offene Fragen für später), 4) Follow-up Next Steps. Nutze klare Bullet Points und Verantwortlichkeiten.",
+    title: "Competitive Analysis Framework",
+    prompt: "Erstelle ein Competitive Analysis Framework für [BRANCHE/PRODUKT] mit folgenden Dimensionen: Feature-Vergleich, Pricing-Strategie, Market Positioning, Customer Reviews Sentiment, GTM-Approach. Identifiziere für jeden Competitor: Unique Strength, Critical Weakness, Opportunity Gap. Leite daraus 3 strategische Empfehlungen ab.",
     category: "business",
-    tags: ["meetings", "productivity", "documentation"],
-    rating: 4.7,
-    uses: 982,
+    tags: ["strategy", "analysis", "competition"],
+    rating: 4.8,
+    uses: 1034,
     author: "hohl.rocks",
     featured: true
   },
 
-  // 💻 TECHNICAL CATEGORY
+  // ⚙️ TECHNICAL CATEGORY
   {
     id: 7,
-    title: "Code Review Strategist",
-    prompt: "Du bist ein erfahrener Tech Lead. Review diesen Code [CODE] und gib strukturiertes Feedback in 3 Kategorien: 1) Critical Issues (Security, Performance, Bugs), 2) Best Practices (Code Quality, Maintainability), 3) Nice-to-Have (Optimizations, Refactoring Ideas). Priorisiere nach Impact vs. Effort.",
+    title: "Code Review Assistant",
+    prompt: "Review folgenden Code-Block für [PROGRAMMIERSPRACHE]: [CODE]. Analysiere auf 3 Ebenen: 1) Funktionalität & Edge Cases, 2) Performance & Optimization Potenzial, 3) Code Quality & Best Practices. Für jedes Issue: Severity (Critical/Major/Minor), Begründung, Konkrete Lösung mit Code-Beispiel.",
     category: "technical",
-    tags: ["code-review", "development", "quality"],
-    rating: 4.9,
-    uses: 2134,
+    tags: ["code", "review", "development"],
+    rating: 4.7,
+    uses: 2156,
     author: "hohl.rocks",
     featured: true
   },
   {
     id: 8,
     title: "API Documentation Generator",
-    prompt: "Erstelle eine professionelle API-Dokumentation für [ENDPOINT]. Inkludiere: 1) Endpoint Description & Use Case, 2) Request Parameters (mit Typen & Validierung), 3) Response Schema (Success & Error Cases), 4) Code Examples (curl, JavaScript, Python), 5) Rate Limits & Authentication. Nutze OpenAPI 3.0 Format.",
+    prompt: "Erstelle eine vollständige API-Dokumentation für [ENDPOINT/SERVICE] im OpenAPI 3.0 Format. Inkludiere: Request/Response Schemas, Error Codes mit Troubleshooting, Rate Limits, Authentication Flow, Code Examples in 3 Sprachen (Python, JavaScript, cURL). Zielgruppe: Developer die das API in 5 Minuten verstehen müssen.",
     category: "technical",
     tags: ["api", "documentation", "development"],
-    rating: 4.8,
-    uses: 1567,
+    rating: 4.6,
+    uses: 891,
     author: "hohl.rocks",
     featured: true
   },
   {
     id: 9,
-    title: "Debug Strategy Architect",
-    prompt: "Ich habe diesen Bug: [BUG-DESCRIPTION]. Entwickle eine systematische Debug-Strategie: 1) Root Cause Hypotheses (3 wahrscheinlichste Ursachen), 2) Investigation Steps (wie kann ich jede Hypothese testen?), 3) Quick Fixes vs. Proper Solutions, 4) Prevention Strategy (wie verhindere ich das in Zukunft?).",
+    title: "Database Schema Architect",
+    prompt: "Designe ein relationales Datenbank-Schema für [ANWENDUNGSFALL]. Definiere: Tabellen mit Feldern & Datentypen, Primary/Foreign Keys, Indizes für Performance, Constraints für Datenintegrität. Berücksichtige: Normalisierung (3NF), Query-Performance, Skalierbarkeit. Liefere SQL CREATE TABLE Statements und ein ER-Diagramm in Text-Form.",
     category: "technical",
-    tags: ["debugging", "problem-solving", "development"],
-    rating: 4.7,
-    uses: 1789,
+    tags: ["database", "schema", "sql"],
+    rating: 4.9,
+    uses: 1456,
     author: "hohl.rocks",
     featured: true
   },
 
-  // 📢 MARKETING CATEGORY
+  // 📚 EDUCATION CATEGORY
   {
     id: 10,
-    title: "LinkedIn Content Engine",
-    prompt: "Erstelle 5 LinkedIn Posts für [THEMA/PRODUKT] die verschiedene Content-Formate nutzen: 1) Personal Story (mit Lesson Learned), 2) Contrarian Take (polarisierender Standpunkt), 3) Data-Driven Insight (mit Zahlen), 4) How-To Guide (praktische Tipps), 5) Question Post (Community Engagement). Jeder Post max. 150 Wörter, Hook in erster Zeile.",
-    category: "marketing",
-    tags: ["linkedin", "social-media", "content"],
-    rating: 4.9,
-    uses: 2456,
+    title: "ELI5 Explainer",
+    prompt: "Erkläre [KOMPLEXES THEMA] in 3 Schwierigkeitsstufen: 1) ELI5 (für 5-Jährige mit Analogien), 2) High School Level (mit Fakten aber ohne Jargon), 3) Expert Level (mit Technical Details). Nutze für jede Stufe ein konkretes Real-World Beispiel. Ziel: Komplexität schrittweise aufbauen, nie überfordern.",
+    category: "education",
+    tags: ["explanation", "learning", "teaching"],
+    rating: 4.8,
+    uses: 3421,
     author: "hohl.rocks",
     featured: true
   },
   {
     id: 11,
-    title: "Email Sequence Builder",
-    prompt: "Entwickle eine 5-Email-Sequence für [ZIEL/CONVERSION]. Jede Email hat einen spezifischen Purpose: 1) Welcome & Value Proposition, 2) Educational Content (Problem Deep Dive), 3) Social Proof & Case Studies, 4) Objection Handling, 5) Strong CTA & Urgency. Schreibe überzeugende Subject Lines und CTAs.",
-    category: "marketing",
-    tags: ["email", "conversion", "copywriting"],
-    rating: 4.8,
-    uses: 1923,
+    title: "Tutorial Step Builder",
+    prompt: "Erstelle ein Tutorial für [SKILL/TOOL] in 5-7 Schritten. Jeder Schritt: 1) Was du lernen wirst (Learning Objective), 2) Detaillierte Anleitung, 3) Häufiger Fehler + wie man ihn vermeidet, 4) Check dein Verständnis (Mini-Challenge). Endgoal: User kann nach Tutorial eigenständig [ERGEBNIS] produzieren.",
+    category: "education",
+    tags: ["tutorial", "learning", "howto"],
+    rating: 4.7,
+    uses: 2789,
     author: "hohl.rocks",
     featured: true
   },
   {
     id: 12,
-    title: "Landing Page Optimizer",
-    prompt: "Analysiere diese Landing Page [URL/DESCRIPTION] und gib Optimization-Empfehlungen für: 1) Above the Fold (Headline, Hero Image, Value Prop), 2) Trust Signals (Social Proof, Testimonials), 3) CTA Strategy (Placement, Copy, Design), 4) Conversion Funnel (Friction Points). Priorisiere nach Expected Impact auf Conversion Rate.",
-    category: "marketing",
-    tags: ["conversion", "landing-page", "optimization"],
-    rating: 4.7,
-    uses: 1654,
+    title: "Study Guide Synthesizer",
+    prompt: "Erstelle einen Study Guide für [THEMA/KURS] der diese Komponenten vereint: 1) Mindmap der Key Concepts mit Relationen, 2) Flashcards für die wichtigsten 20 Facts, 3) Practice Questions (Multiple Choice + Open Ended), 4) Mnemonic Devices für schwer zu merkende Infos, 5) Recommended Deep-Dive Resources.",
+    category: "education",
+    tags: ["study", "learning", "exam"],
+    rating: 4.9,
+    uses: 1876,
     author: "hohl.rocks",
     featured: true
   },
 
-  // ⚡ PRODUCTIVITY CATEGORY
+  // 📝 WRITING CATEGORY
   {
     id: 13,
-    title: "Task Prioritization Matrix",
-    prompt: "Ich habe diese Tasks: [TASK-LIST]. Erstelle eine Eisenhower Matrix (Urgent/Important) und kategorisiere jede Task. Für jede Task gib: 1) Priorität (Do First, Schedule, Delegate, Delete), 2) Estimated Time, 3) Dependencies, 4) Next Action (konkrete erste Schritte). Schlage eine Tagesplanung vor.",
-    category: "productivity",
-    tags: ["time-management", "planning", "organization"],
+    title: "LinkedIn Post Formula",
+    prompt: "Schreibe einen LinkedIn Post über [THEMA] nach der 'Hook-Story-Value-CTA' Formel: 1) Hook erste Zeile (überraschender Fakt oder provokante These), 2) Kurze persönliche Story (60-80 Wörter), 3) Actionable Value (3 konkrete Takeaways), 4) Engagement CTA (Frage an Community). Ton: Authentisch, nicht verkauferisch. Länge: 150-200 Wörter.",
+    category: "writing",
+    tags: ["linkedin", "social", "content"],
     rating: 4.8,
-    uses: 1876,
+    uses: 4512,
     author: "hohl.rocks",
     featured: true
   },
   {
     id: 14,
-    title: "Note-Taking System Designer",
-    prompt: "Entwickle ein Zettelkasten-System für [THEMA/PROJEKT]. Erstelle: 1) Note Categories (Fleeting, Literature, Permanent), 2) Tagging Strategy (max. 5 Tag-Kategorien), 3) Linking Principles (wie verknüpfe ich Notes?), 4) Review Process (wie halte ich System aktuell?). Nutze Markdown-Format.",
-    category: "productivity",
-    tags: ["note-taking", "knowledge-management", "learning"],
+    title: "Email Subject Line Lab",
+    prompt: "Generiere 10 Email Subject Lines für [KAMPAGNE/NEWSLETTER] die verschiedene Psychological Triggers nutzen: Curiosity Gap, Urgency, Social Proof, Personalization, Benefit-Driven, Question-Based, Number-Driven, Humor, Controversy, Simplicity. Für jede Line: Geschätzter Open Rate Potential (Low/Med/High) + Begründung.",
+    category: "writing",
+    tags: ["email", "marketing", "copywriting"],
     rating: 4.7,
-    uses: 1234,
+    uses: 3245,
     author: "hohl.rocks",
     featured: true
   },
   {
     id: 15,
-    title: "Focus Session Planner",
-    prompt: "Plane eine Deep Work Session für [AUFGABE]. Erstelle: 1) Environment Setup (Was brauche ich? Was muss weg?), 2) Time Blocking (25/50/90 Min?), 3) Break Strategy (kurz/lang, was mache ich?), 4) Success Metrics (wie messe ich Fortschritt?), 5) Distraction Management (wenn ich abgelenkt werde?). Nutze Pomodoro oder Time Blocking.",
-    category: "productivity",
-    tags: ["focus", "deep-work", "time-management"],
+    title: "Blog Post Outliner",
+    prompt: "Erstelle einen SEO-optimierten Blog Post Outline für [KEYWORD/THEMA]. Struktur: 1) Attention-Grabbing Title (mit Power Word), 2) Introduction mit Hook, 3) H2 Subheadings (mindestens 5) die Search Intent abdecken, 4) Key Points unter jedem H2, 5) FAQ Section (5 Fragen), 6) Conclusion mit CTA. Ziel: Featured Snippet + 8+ Min Lesedauer.",
+    category: "writing",
+    tags: ["blog", "seo", "content"],
     rating: 4.9,
-    uses: 2145,
+    uses: 2891,
     author: "hohl.rocks",
     featured: true
   },
 
-  // Additional Prompts for variety
+  // 🤖 AI/PROMPT ENGINEERING CATEGORY
   {
     id: 16,
-    title: "Newsletter Hook Writer",
-    prompt: "Schreibe 10 verschiedene Opening Hooks für meinen Newsletter über [THEMA]. Jeder Hook sollte einen anderen psychologischen Trigger nutzen: Curiosity Gap, FOMO, Contrarian View, Personal Story, Bold Claim, Question, Statistic, Quote, Metaphor, Current Event. Max 2 Sätze pro Hook.",
-    category: "creative",
-    tags: ["newsletter", "copywriting", "hooks"],
-    rating: 4.6,
-    uses: 876,
+    title: "System Prompt Builder",
+    prompt: "Erstelle einen System Prompt für einen AI Assistant der [ROLLE/AUFGABE] erfüllt. Inkludiere: 1) Role Definition (Wer bist du, was ist deine Expertise?), 2) Task Boundaries (Was tust du, was nicht?), 3) Output Format (Struktur der Antworten), 4) Tone & Style Guidelines, 5) Edge Case Handling (Was bei unklaren Anfragen?). Teste mit 3 Example Inputs.",
+    category: "ai",
+    tags: ["prompt", "ai", "llm"],
+    rating: 4.9,
+    uses: 1789,
     author: "hohl.rocks",
-    featured: false
+    featured: true
   },
   {
     id: 17,
-    title: "Competitive Analysis Framework",
-    prompt: "Analysiere [COMPETITOR] und erstelle ein Competitive Intel Report: 1) Positioning & Value Prop, 2) Pricing Strategy, 3) Customer Reviews (was lieben/hassen Kunden?), 4) Marketing Channels, 5) Unique Selling Points vs. Our Advantages. Identifiziere Gaps die wir nutzen können.",
-    category: "business",
-    tags: ["competitive-analysis", "strategy", "research"],
+    title: "Few-Shot Prompt Designer",
+    prompt: "Designe einen Few-Shot Prompt für [AUFGABE] mit dieser Struktur: 1) Clear Instruction (Was soll Output sein?), 2) 3 Diverse Examples (Input → Output Pairs), 3) Edge Case Example (wie mit Ausnahmen umgehen), 4) Output Format Specification (JSON, Markdown, etc.), 5) Quality Criteria (was macht Output 'gut'?). Optimiere für Consistency.",
+    category: "ai",
+    tags: ["prompt", "few-shot", "llm"],
     rating: 4.8,
-    uses: 1432,
+    uses: 1234,
     author: "hohl.rocks",
-    featured: false
+    featured: true
   },
   {
     id: 18,
-    title: "System Architecture Designer",
-    prompt: "Entwirf eine System Architecture für [PROJEKT/FEATURE]. Beschreibe: 1) Components & Their Responsibilities, 2) Data Flow (wie kommunizieren Components?), 3) Tech Stack Decisions (warum diese Technologie?), 4) Scalability Considerations, 5) Potential Bottlenecks. Nutze C4 Model Notation.",
-    category: "technical",
-    tags: ["architecture", "system-design", "planning"],
-    rating: 4.9,
-    uses: 1678,
+    title: "Chain-of-Thought Optimizer",
+    prompt: "Konvertiere [SIMPLE PROMPT] in einen Chain-of-Thought Prompt der bessere Reasoning produziert. Struktur: 1) Problem Decomposition (Zerlege in Sub-Problems), 2) Step-by-Step Reasoning (Denke laut), 3) Self-Verification (Check deine Logik), 4) Final Answer. Vergleiche Output-Qualität vorher/nachher und erkläre den Unterschied.",
+    category: "ai",
+    tags: ["prompt", "cot", "reasoning"],
+    rating: 4.7,
+    uses: 987,
     author: "hohl.rocks",
-    featured: false
+    featured: true
   },
+
+  // 💬 COMMUNICATION CATEGORY
   {
     id: 19,
-    title: "Social Media Calendar Builder",
-    prompt: "Erstelle einen 30-Tage Content Calendar für [BRAND/THEMA] über [PLATFORM]. Für jeden Post gib: 1) Content Type (Carousel, Video, Text), 2) Topic & Angle, 3) Best Posting Time, 4) Hashtag Strategy, 5) Engagement Goal. Mix aus Educational, Promotional, und Engaging Content im 80/20 Verhältnis.",
-    category: "marketing",
-    tags: ["social-media", "content-planning", "calendar"],
-    rating: 4.7,
-    uses: 1543,
+    title: "Feedback Sandwich Maker",
+    prompt: "Formuliere konstruktives Feedback für [SITUATION/PERSON] nach der 'Context-Behavior-Impact-Future' Methode: 1) Context (Was war die Situation?), 2) Observed Behavior (Was hast du gesehen? Fakten ohne Interpretation), 3) Impact (Wie hat es sich ausgewirkt?), 4) Future Action (Konkrete Verbesserungs-Vorschläge). Ton: Constructive, empathetic, action-oriented.",
+    category: "communication",
+    tags: ["feedback", "management", "leadership"],
+    rating: 4.8,
+    uses: 1567,
     author: "hohl.rocks",
-    featured: false
+    featured: true
   },
   {
     id: 20,
     title: "Meeting Agenda Architect",
-    prompt: "Erstelle eine effektive Meeting Agenda für [MEETING-TYP] mit [TEILNEHMER]. Inkludiere: 1) Meeting Goal (was ist Success?), 2) Agenda Items (mit Zeitslots), 3) Pre-Read Materials (was sollten alle vorher lesen?), 4) Decision Points (was muss entschieden werden?), 5) Next Steps Template. Max 60 Minuten Meeting.",
-    category: "productivity",
-    tags: ["meetings", "agenda", "planning"],
+    prompt: "Erstelle eine Meeting Agenda für [MEETING-TYP] die in [DAUER] durchführbar ist. Für jedes Agenda Item: 1) Time Block (realistisch!), 2) Objective (Was soll erreicht werden?), 3) Owner (Wer führt?), 4) Prep Required (Was müssen Teilnehmer vorbereiten?). Endgoal: Alle wissen vor Meeting was erwartet wird + nach Meeting was next steps sind.",
+    category: "communication",
+    tags: ["meeting", "productivity", "management"],
     rating: 4.6,
-    uses: 987,
+    uses: 2134,
     author: "hohl.rocks",
-    featured: false
+    featured: true
   },
+
+  // 📊 DATA/ANALYTICS CATEGORY
   {
     id: 21,
-    title: "Metaphor Generator",
-    prompt: "Ich erkläre [KOMPLEXES-KONZEPT]. Generiere 5 verschiedene Metaphern die das Konzept vereinfachen: 1) Everyday Object Metaphor, 2) Nature Metaphor, 3) Sports/Games Metaphor, 4) Cooking Metaphor, 5) Building/Architecture Metaphor. Jede Metapher sollte einen anderen Aspekt highlighten.",
-    category: "creative",
-    tags: ["metaphors", "communication", "teaching"],
-    rating: 4.5,
-    uses: 654,
+    title: "Dashboard KPI Designer",
+    prompt: "Designe ein Dashboard für [BUSINESS FUNCTION] mit diesen Komponenten: 1) North Star Metric (Die EINE wichtigste Zahl), 2) Supporting KPIs (5-7 Metriken die North Star treiben), 3) Trend Indicators (WoW, MoM, YoY), 4) Alert Thresholds (Ab wann Action nötig?), 5) Recommended Visualizations (Chart Type + Why). Ziel: Actionable Insights auf einen Blick.",
+    category: "data",
+    tags: ["analytics", "kpi", "dashboard"],
+    rating: 4.7,
+    uses: 1456,
     author: "hohl.rocks",
-    featured: false
+    featured: true
   },
   {
     id: 22,
-    title: "OKR Framework Builder",
-    prompt: "Erstelle OKRs für [TEAM/PROJEKT] für Q[X]. Definiere: 1) Objective (inspiring, qualitativ), 2) 3-5 Key Results (measurable, quantitativ, ambitious but achievable), 3) Initiatives (wie erreichen wir die KRs?), 4) Success Metrics (wie messen wir?). Nutze SMART Framework für Key Results.",
-    category: "business",
-    tags: ["okr", "goals", "planning"],
+    title: "A/B Test Hypothesis Builder",
+    prompt: "Formuliere eine A/B Test Hypothese für [ÄNDERUNG/FEATURE] nach dem Format: 'Wir glauben dass [CHANGE] zu [EXPECTED OUTCOME] führt, weil [REASONING]. Wir messen das mit [PRIMARY METRIC] und erwarten [X% LIFT]. Wir brauchen [SAMPLE SIZE] über [DURATION].' Inkludiere: Success Criteria, Risk Assessment, Learning Objective.",
+    category: "data",
+    tags: ["testing", "hypothesis", "optimization"],
     rating: 4.8,
-    uses: 1765,
+    uses: 1123,
     author: "hohl.rocks",
-    featured: false
+    featured: true
   },
+
+  // 🎯 MARKETING CATEGORY
   {
     id: 23,
-    title: "Git Commit Message Writer",
-    prompt: "Schreibe aussagekräftige Git Commit Messages für diese Änderungen: [CHANGES]. Nutze Conventional Commits Format: type(scope): description. Types: feat, fix, docs, style, refactor, test, chore. Inkludiere: 1) Was wurde geändert?, 2) Warum?, 3) Breaking Changes? Max 50 chars für Subject, Details im Body.",
-    category: "technical",
-    tags: ["git", "documentation", "development"],
-    rating: 4.6,
-    uses: 1234,
+    title: "Customer Persona Builder",
+    prompt: "Erstelle eine detaillierte Customer Persona für [PRODUKT/SERVICE] basierend auf Jobs-To-Be-Done Framework. Inkludiere: 1) Demographic Basics, 2) Job to be Done (funktional + emotional), 3) Pains & Gains, 4) Buying Triggers & Barriers, 5) Information Sources & Influencers, 6) 'A Day in the Life' Narrative. Mache die Persona real, nicht abstrakt.",
+    category: "marketing",
+    tags: ["persona", "customer", "strategy"],
+    rating: 4.9,
+    uses: 2345,
     author: "hohl.rocks",
-    featured: false
+    featured: true
   },
   {
     id: 24,
-    title: "Sales Objection Handler",
-    prompt: "Ich bekomme diesen Einwand: [OBJECTION]. Erstelle eine Response-Strategie: 1) Acknowledge & Empathize (zeige Verständnis), 2) Clarify (stelle Fragen um echten Grund zu verstehen), 3) Address (gib konkrete Antwort mit Proof), 4) Reframe (drehe Objection in Vorteil), 5) Next Step (wie weiter?).",
+    title: "Value Proposition Canvas",
+    prompt: "Fülle einen Value Proposition Canvas für [PRODUKT] aus. Linke Seite (Customer Profile): Jobs, Pains, Gains. Rechte Seite (Value Map): Products/Services, Pain Relievers, Gain Creators. Für jedes Element: Konkrete Beispiele, nicht generische Statements. Identifiziere den stärksten Fit und formuliere daraus einen One-Liner Value Prop.",
     category: "marketing",
-    tags: ["sales", "objection-handling", "communication"],
-    rating: 4.7,
-    uses: 1432,
+    tags: ["value", "proposition", "strategy"],
+    rating: 4.8,
+    uses: 1789,
     author: "hohl.rocks",
-    featured: false
+    featured: true
   },
+
+  // 🚀 PRODUCTIVITY CATEGORY
   {
     id: 25,
-    title: "Learning Path Designer",
-    prompt: "Ich will [SKILL/THEMA] lernen. Erstelle einen 90-Tage Learning Path: 1) Foundations (Was sind Basics? Welche Ressourcen?), 2) Intermediate (Hands-on Projects), 3) Advanced (Deep Dives & Specializations), 4) Practice Strategy (wie übe ich täglich?), 5) Success Milestones (wie messe ich Progress?).",
+    title: "Sprint Planning Template",
+    prompt: "Erstelle einen Sprint Plan für [PROJEKT/FEATURE] nach dieser Struktur: 1) Sprint Goal (Was ist Success?), 2) User Stories mit Acceptance Criteria, 3) Task Breakdown mit Effort Estimates, 4) Dependency Map, 5) Risk Assessment & Mitigation. Nutze Story Points (Fibonacci) und berücksichtige Team Capacity. Endgoal: Realistic, achievable Sprint.",
     category: "productivity",
-    tags: ["learning", "skill-development", "education"],
-    rating: 4.8,
-    uses: 1876,
+    tags: ["agile", "sprint", "project"],
+    rating: 4.7,
+    uses: 1567,
     author: "hohl.rocks",
-    featured: false
+    featured: true
   },
   {
     id: 26,
-    title: "Video Script Architect",
-    prompt: "Schreibe ein Video-Script für [VIDEO-THEMA] (Länge: [MINUTEN]). Struktur: 1) Hook (erste 5 Sekunden - warum weiterschauen?), 2) Value Promise (was lernt Zuschauer?), 3) Main Content (3-5 Key Points), 4) Examples/Stories, 5) Strong CTA. Inkludiere Scene Descriptions und Visual Suggestions.",
-    category: "creative",
-    tags: ["video", "script", "content"],
-    rating: 4.7,
-    uses: 1345,
+    title: "Decision Matrix Builder",
+    prompt: "Erstelle eine Decision Matrix für [ENTSCHEIDUNG] mit diesen Schritten: 1) Liste alle Optionen (min. 3), 2) Definiere Evaluation Criteria mit Weights (Total = 100%), 3) Score jede Option pro Criterion (1-10), 4) Calculate Weighted Scores, 5) Sensitivity Analysis (was wenn Weights ändern?). Empfehle die beste Option mit Begründung.",
+    category: "productivity",
+    tags: ["decision", "framework", "analysis"],
+    rating: 4.8,
+    uses: 1891,
     author: "hohl.rocks",
-    featured: false
+    featured: true
   },
+
+  // 🎨 DESIGN CATEGORY
   {
     id: 27,
-    title: "User Story Writer",
-    prompt: "Erstelle User Stories für [FEATURE] nach Format: 'As a [ROLE], I want [ACTION], so that [BENEFIT]'. Inkludiere: 1) Acceptance Criteria (Definition of Done), 2) Technical Considerations, 3) Edge Cases, 4) Dependencies, 5) Story Points Estimate. Nutze INVEST Prinzip (Independent, Negotiable, Valuable, Estimable, Small, Testable).",
-    category: "technical",
-    tags: ["agile", "user-stories", "product"],
-    rating: 4.8,
-    uses: 1567,
+    title: "UX Research Plan",
+    prompt: "Erstelle einen UX Research Plan für [FEATURE/PRODUKT] mit: 1) Research Questions (Was wollen wir lernen?), 2) Methodology (Interviews, Surveys, Usability Tests?), 3) Participant Criteria & Recruitment, 4) Discussion Guide / Test Script, 5) Analysis Framework, 6) Timeline & Resources. Ziel: Actionable Insights, nicht nur 'interesting findings'.",
+    category: "design",
+    tags: ["ux", "research", "testing"],
+    rating: 4.7,
+    uses: 1234,
     author: "hohl.rocks",
-    featured: false
+    featured: true
   },
   {
     id: 28,
-    title: "PR Strategy Generator",
-    prompt: "Entwickle eine PR-Strategie für [ANNOUNCEMENT/LAUNCH]. Plane: 1) Key Messages (3 Core Messages), 2) Target Media (welche Outlets/Journalisten?), 3) Press Release Structure, 4) Pitch Email Template, 5) Follow-up Strategy, 6) Crisis Preparation (was wenn negatives Feedback?). Timeline: [ZEITRAUM].",
-    category: "marketing",
-    tags: ["pr", "communications", "media"],
-    rating: 4.6,
-    uses: 876,
+    title: "Design System Foundation",
+    prompt: "Lege das Foundation für ein Design System für [PRODUKT/BRAND] fest: 1) Color Palette (Primary, Secondary, Semantic Colors mit Hex), 2) Typography Scale (Font Families, Sizes, Line Heights), 3) Spacing System (4pt/8pt Grid?), 4) Component Naming Convention, 5) Accessibility Standards (WCAG Level). Liefere Design Tokens in JSON Format.",
+    category: "design",
+    tags: ["design-system", "ui", "foundation"],
+    rating: 4.9,
+    uses: 1678,
     author: "hohl.rocks",
-    featured: false
+    featured: true
   },
+
+  // 💡 INNOVATION CATEGORY
   {
     id: 29,
-    title: "Decision Framework Builder",
-    prompt: "Ich muss diese Entscheidung treffen: [DECISION]. Erstelle einen Decision Framework: 1) Options (alle möglichen Optionen), 2) Criteria (nach was bewerte ich? Gewichtung?), 3) Pros/Cons Matrix, 4) Risk Assessment (Was kann schiefgehen?), 5) Reversibility (kann ich Entscheidung rückgängig machen?). Nutze Weighted Scoring.",
-    category: "productivity",
-    tags: ["decision-making", "framework", "problem-solving"],
-    rating: 4.9,
-    uses: 1987,
+    title: "SCAMPER Ideation",
+    prompt: "Nutze die SCAMPER Methode um [PRODUKT/SERVICE] neu zu denken: S - Substitute (Was ersetzen?), C - Combine (Was kombinieren?), A - Adapt (Was anpassen?), M - Modify (Was verändern?), P - Put to other use (Andere Nutzung?), E - Eliminate (Was weglassen?), R - Reverse (Was umkehren?). Für jede Dimension: 2-3 konkrete Ideen. Bewerte Top 3 nach Feasibility & Impact.",
+    category: "innovation",
+    tags: ["ideation", "creativity", "innovation"],
+    rating: 4.8,
+    uses: 987,
     author: "hohl.rocks",
-    featured: false
+    featured: true
   },
   {
     id: 30,
-    title: "Feedback Framework Writer",
-    prompt: "Ich muss Feedback geben zu [SITUATION/PERSON]. Nutze SBI Framework (Situation-Behavior-Impact): 1) Describe Specific Situation, 2) Describe Observable Behavior (ohne Interpretation), 3) Explain Impact (auf dich, Team, Projekt), 4) Ask Questions (verstehe andere Perspektive), 5) Agree on Next Steps. Constructive & Actionable.",
-    category: "business",
-    tags: ["feedback", "communication", "management"],
-    rating: 4.8,
-    uses: 1654,
+    title: "Trend Forecasting Framework",
+    prompt: "Analysiere Trends in [INDUSTRIE/BEREICH] und forecaste Entwicklungen für die nächsten 12-24 Monate. Nutze PESTEL Framework (Political, Economic, Social, Technological, Environmental, Legal). Für jeden Trend: Current State, Driving Forces, Potential Disruptions, Strategic Implications. Identifiziere 3 'Weak Signals' die andere noch nicht sehen.",
+    category: "innovation",
+    tags: ["trends", "forecast", "strategy"],
+    rating: 4.7,
+    uses: 1345,
     author: "hohl.rocks",
-    featured: false
+    featured: true
   }
 ];
 
 // ===================================================================
-// HEALTH CHECK
+// HELPER FUNCTIONS
 // ===================================================================
 
+async function callClaude(systemPrompt, userPrompt, maxTokens = 1500) {
+  try {
+    const message = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      messages: [
+        {
+          role: "user",
+          content: userPrompt,
+        },
+      ],
+    });
+
+    return message.content[0].text;
+  } catch (error) {
+    console.error("Anthropic API Error:", error);
+    throw error;
+  }
+}
+
+// ===================================================================
+// ROUTES
+// ===================================================================
+
+// Health Check
 app.get("/", (req, res) => {
   res.json({
     status: "ok",
     message: "hohl.rocks backend is running",
-    features: [
-      "Prompt Generator",
-      "Prompt Optimizer",
-      "Prompt Library",
-      OPENAI_AVAILABLE ? "Model Battle (enabled)" : "Model Battle (disabled - install openai)"
-    ],
+    features: ["prompt-generator", "prompt-optimizer", "prompt-library"],
     timestamp: new Date().toISOString(),
   });
 });
 
 // ===================================================================
-// PROMPT GENERATOR
+// FEATURE #1: PROMPT GENERATOR
 // ===================================================================
 
 app.post("/api/prompt-generator", async (req, res) => {
   try {
     const { topic } = req.body;
 
-    if (!topic || topic.trim().length === 0) {
-      return res.status(400).json({ error: "Topic is required" });
+    if (!topic || typeof topic !== "string" || topic.trim().length === 0) {
+      return res.status(400).json({
+        error: "Invalid input",
+        message: "Topic is required and must be a non-empty string",
+      });
     }
 
-    console.log(`\n✨ Generating prompts for: "${topic}"`);
+    const systemPrompt = `Du bist ein Prompt Engineering Experte. Deine Aufgabe ist es, für ein gegebenes Thema 5 verschiedene Prompt-Styles zu generieren.
 
-    const systemPrompt = `Du bist ein KI-Prompt-Experte. Deine Aufgabe ist es, für ein gegebenes Thema 5 verschiedene Prompts zu generieren, die unterschiedliche Perspektiven und Anwendungsfälle abdecken.
+Die 5 Styles sind:
+1. EXECUTIVE: Business-strategisch, ROI-fokussiert, für C-Level
+2. TECHNICAL: Entwickler-orientiert, implementierungs-fokussiert, technisch präzise
+3. CREATIVE: Out-of-the-box, metaphorisch, visuell anregend
+4. TUTORIAL: Step-by-step, didaktisch, für Anfänger geeignet
+5. EXPERT: Deep-dive, akademisch, für Experten
 
-Die 5 Prompt-Styles sind:
-1. **Executive Summary**: Kurz, prägnant, fokussiert auf Key Insights
-2. **Deep Dive**: Detailliert, analytisch, comprehensive
-3. **Creative Angle**: Innovativ, out-of-the-box, unkonventionell
-4. **Practical Guide**: Step-by-step, actionable, hands-on
-5. **Expert Analysis**: Technisch, wissenschaftlich, data-driven
-
-Für jedes Style generiere einen konkreten, direkt verwendbaren Prompt. Der Prompt sollte:
-- Klar und spezifisch sein
-- Den gewünschten Output-Format definieren
-- Relevante Kontext-Informationen enthalten
+Jeder Prompt sollte:
+- Spezifisch und actionable sein
+- Den jeweiligen Style klar repräsentieren
 - 2-4 Sätze lang sein
+- Deutsche Sprache nutzen
 
-Antworte NUR mit einem JSON-Array, keine zusätzlichen Erklärungen.`;
+Ausgabeformat (genau so formatieren):
+[STYLE_NAME]
+[Prompt Text hier]
 
-    const userPrompt = `Thema: "${topic}"
+[STYLE_NAME]
+[Prompt Text hier]
 
-Erstelle 5 Prompts in diesem Format:
-[
-  {
-    "style": "Executive Summary",
-    "prompt": "...",
-    "useCase": "..."
-  },
-  ...
-]`;
+etc.`;
 
-    const message = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 2000,
-      messages: [
-        {
-          role: "user",
-          content: `${systemPrompt}\n\n${userPrompt}`,
-        },
-      ],
-    });
+    const userPrompt = `Thema: ${topic.trim()}
 
-    const responseText = message.content[0].text;
-    
-    // Extract JSON from response
-    let prompts;
-    try {
-      // Try to parse directly
-      prompts = JSON.parse(responseText);
-    } catch (e) {
-      // Try to extract JSON from markdown code blocks
-      const jsonMatch = responseText.match(/```json\n([\s\S]+?)\n```/);
-      if (jsonMatch) {
-        prompts = JSON.parse(jsonMatch[1]);
-      } else {
-        // Try to find JSON array in text
-        const arrayMatch = responseText.match(/\[\s*{[\s\S]+}\s*\]/);
-        if (arrayMatch) {
-          prompts = JSON.parse(arrayMatch[0]);
-        } else {
-          throw new Error("Could not parse JSON from response");
-        }
+Generiere 5 verschiedene Prompt-Styles (Executive, Technical, Creative, Tutorial, Expert) für dieses Thema.`;
+
+    const response = await callClaude(systemPrompt, userPrompt, 2000);
+
+    // Parse die Antwort
+    const styles = {};
+    const sections = response.split("\n\n").filter((s) => s.trim());
+
+    const styleNames = ["executive", "technical", "creative", "tutorial", "expert"];
+    let currentIndex = 0;
+
+    sections.forEach((section) => {
+      const lines = section.split("\n").filter((l) => l.trim());
+      if (lines.length >= 2) {
+        const styleName = styleNames[currentIndex] || `style_${currentIndex}`;
+        const promptText = lines.slice(1).join(" ").trim();
+        styles[styleName] = promptText;
+        currentIndex++;
       }
-    }
-
-    console.log(`✅ Generated ${prompts.length} prompts`);
+    });
 
     res.json({
       success: true,
-      topic,
-      prompts,
+      topic: topic.trim(),
+      styles: styles,
       timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
-    console.error("Error generating prompts:", error);
+    console.error("Error in prompt-generator:", error);
     res.status(500).json({
-      error: "Failed to generate prompts",
+      error: "Generation failed",
       message: error.message,
     });
   }
 });
 
 // ===================================================================
-// PROMPT OPTIMIZER
+// FEATURE #3: PROMPT OPTIMIZER
 // ===================================================================
 
 app.post("/api/prompt-optimizer", async (req, res) => {
   try {
     const { prompt } = req.body;
 
-    if (!prompt || prompt.trim().length === 0) {
-      return res.status(400).json({ error: "Prompt is required" });
+    if (!prompt || typeof prompt !== "string" || prompt.trim().length === 0) {
+      return res.status(400).json({
+        error: "Invalid input",
+        message: "Prompt is required and must be a non-empty string",
+      });
     }
 
-    console.log(`\n⚡ Optimizing prompt: "${prompt.slice(0, 50)}..."`);
+    const systemPrompt = `Du bist ein Prompt Engineering Experte. Deine Aufgabe ist es, einen gegebenen Prompt zu analysieren, zu bewerten und zu optimieren.
 
-    const systemPrompt = `Du bist ein KI-Prompt-Engineering-Experte. Deine Aufgabe ist es, einen gegebenen Prompt zu analysieren und zu verbessern.
+Analyse-Kriterien:
+1. Klarheit: Ist der Prompt eindeutig verständlich?
+2. Spezifität: Sind die Anforderungen konkret genug?
+3. Kontext: Ist genug Kontext für eine gute Antwort gegeben?
+4. Struktur: Ist der Prompt gut strukturiert?
+5. Actionability: Ist klar, was das gewünschte Output sein soll?
 
-Analysiere den Prompt auf diese Kriterien:
-1. **Clarity**: Ist der Prompt klar und eindeutig?
-2. **Specificity**: Ist der gewünschte Output spezifisch definiert?
-3. **Context**: Enthält der Prompt ausreichend Kontext?
-4. **Structure**: Ist der Prompt gut strukturiert?
-5. **Actionability**: Kann eine KI damit direkt arbeiten?
+Ausgabeformat (EXAKT so formatieren, keine zusätzlichen Zeichen):
+SCORE: [Zahl von 1-10]
+PROBLEMS:
+- [Problem 1]
+- [Problem 2]
+- [Problem 3]
+IMPROVED:
+[Optimierter Prompt hier]
+EXPLANATION:
+[Erklärung warum besser]`;
 
-Bewerte den Prompt mit einem Score von 1-100 und gib konkrete Verbesserungsvorschläge.
+    const userPrompt = `Original Prompt: "${prompt.trim()}"
 
-Antworte NUR mit einem JSON-Objekt, keine zusätzlichen Erklärungen.`;
+Analysiere und optimiere diesen Prompt. Gib einen Score (1-10), liste Probleme, erstelle einen verbesserten Prompt und erkläre die Verbesserungen.`;
 
-    const userPrompt = `Original Prompt: "${prompt}"
+    const response = await callClaude(systemPrompt, userPrompt, 2500);
 
-Analysiere und verbessere diesen Prompt. Format:
-{
-  "originalScore": 65,
-  "analysis": {
-    "clarity": 7,
-    "specificity": 6,
-    "context": 5,
-    "structure": 7,
-    "actionability": 6
-  },
-  "improvements": [
-    "Improvement 1",
-    "Improvement 2",
-    "Improvement 3"
-  ],
-  "optimizedPrompt": "Der verbesserte Prompt...",
-  "optimizedScore": 88
-}`;
+    // Parse die Antwort
+    const scoreMatch = response.match(/SCORE:\s*(\d+)/);
+    const score = scoreMatch ? parseInt(scoreMatch[1]) : 5;
 
-    const message = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 2000,
-      messages: [
-        {
-          role: "user",
-          content: `${systemPrompt}\n\n${userPrompt}`,
-        },
-      ],
-    });
+    const problemsMatch = response.match(/PROBLEMS:\s*([\s\S]*?)(?=IMPROVED:|$)/);
+    const problemsText = problemsMatch ? problemsMatch[1].trim() : "";
+    const problems = problemsText
+      .split("\n")
+      .filter((line) => line.trim().startsWith("-"))
+      .map((line) => line.replace(/^-\s*/, "").trim())
+      .filter((p) => p.length > 0);
 
-    const responseText = message.content[0].text;
-    
-    // Extract JSON from response
-    let result;
-    try {
-      result = JSON.parse(responseText);
-    } catch (e) {
-      const jsonMatch = responseText.match(/```json\n([\s\S]+?)\n```/);
-      if (jsonMatch) {
-        result = JSON.parse(jsonMatch[1]);
-      } else {
-        const objectMatch = responseText.match(/{[\s\S]+}/);
-        if (objectMatch) {
-          result = JSON.parse(objectMatch[0]);
-        } else {
-          throw new Error("Could not parse JSON from response");
-        }
-      }
-    }
+    const improvedMatch = response.match(/IMPROVED:\s*([\s\S]*?)(?=EXPLANATION:|$)/);
+    const improvedPrompt = improvedMatch ? improvedMatch[1].trim() : prompt;
 
-    console.log(`✅ Optimized (${result.originalScore} → ${result.optimizedScore})`);
+    const explanationMatch = response.match(/EXPLANATION:\s*([\s\S]*?)$/);
+    const explanation = explanationMatch ? explanationMatch[1].trim() : "Verbesserungen wurden vorgenommen.";
 
     res.json({
       success: true,
-      ...result,
+      original: {
+        prompt: prompt.trim(),
+        score: score,
+      },
+      analysis: {
+        problems: problems.length > 0 ? problems : ["Prompt könnte spezifischer sein"],
+      },
+      improved: {
+        prompt: improvedPrompt,
+        score: Math.min(score + 3, 10),
+        explanation: explanation,
+      },
       timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
-    console.error("Error optimizing prompt:", error);
+    console.error("Error in prompt-optimizer:", error);
     res.status(500).json({
-      error: "Failed to optimize prompt",
+      error: "Optimization failed",
       message: error.message,
     });
   }
 });
 
 // ===================================================================
-// PROMPT LIBRARY - Get All Prompts
+// FEATURE #5: PROMPT LIBRARY
 // ===================================================================
 
 app.get("/api/prompts", (req, res) => {
   try {
-    console.log(`\n📚 Fetching all prompts (${FEATURED_PROMPTS.length} total)`);
+    const { category, search, featured } = req.query;
 
-    // Optional: Filter by category
-    const { category } = req.query;
-    
-    let prompts = FEATURED_PROMPTS;
-    
-    if (category && category !== 'all') {
-      prompts = FEATURED_PROMPTS.filter(p => p.category === category);
-      console.log(`   Filtered by category '${category}': ${prompts.length} prompts`);
+    let filteredPrompts = [...FEATURED_PROMPTS];
+
+    // Filter by category
+    if (category && category !== "all") {
+      filteredPrompts = filteredPrompts.filter((p) => p.category === category);
     }
+
+    // Filter by featured
+    if (featured === "true") {
+      filteredPrompts = filteredPrompts.filter((p) => p.featured === true);
+    }
+
+    // Search in title, prompt, and tags
+    if (search && search.trim().length > 0) {
+      const searchLower = search.toLowerCase().trim();
+      filteredPrompts = filteredPrompts.filter(
+        (p) =>
+          p.title.toLowerCase().includes(searchLower) ||
+          p.prompt.toLowerCase().includes(searchLower) ||
+          p.tags.some((tag) => tag.toLowerCase().includes(searchLower))
+      );
+    }
+
+    // Sort by rating (descending) then by uses (descending)
+    filteredPrompts.sort((a, b) => {
+      if (b.rating !== a.rating) return b.rating - a.rating;
+      return b.uses - a.uses;
+    });
 
     res.json({
       success: true,
-      prompts,
-      total: prompts.length,
-      categories: ["creative", "business", "technical", "marketing", "productivity"],
+      count: filteredPrompts.length,
+      prompts: filteredPrompts,
+      categories: ["all", "creative", "business", "technical", "education", "writing", "ai", "communication", "data", "marketing", "productivity", "design", "innovation"],
       timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
-    console.error("Error fetching prompts:", error);
+    console.error("Error in prompts:", error);
     res.status(500).json({
       error: "Failed to fetch prompts",
       message: error.message,
@@ -655,30 +664,24 @@ app.get("/api/prompts", (req, res) => {
   }
 });
 
-// ===================================================================
-// PROMPT LIBRARY - Get Single Prompt
-// ===================================================================
-
+// Get single prompt by ID
 app.get("/api/prompts/:id", (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const prompt = FEATURED_PROMPTS.find(p => p.id === id);
+    const prompt = FEATURED_PROMPTS.find((p) => p.id === id);
 
     if (!prompt) {
       return res.status(404).json({
-        error: "Prompt not found",
-        id,
+        error: "Not found",
+        message: `Prompt with ID ${id} not found`,
       });
     }
 
-    console.log(`\n📖 Fetching prompt #${id}: "${prompt.title}"`);
-
     res.json({
       success: true,
-      prompt,
+      prompt: prompt,
       timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
     console.error("Error fetching prompt:", error);
     res.status(500).json({
@@ -693,15 +696,6 @@ app.get("/api/prompts/:id", (req, res) => {
 // ===================================================================
 
 app.post("/api/model-battle", async (req, res) => {
-  // Check if OpenAI is available
-  if (!OPENAI_AVAILABLE) {
-    return res.status(503).json({
-      error: "Model Battle is currently unavailable",
-      message: "OpenAI SDK not installed. Run: npm install openai",
-      available: false
-    });
-  }
-
   try {
     const { prompt } = req.body;
 
@@ -862,6 +856,211 @@ app.post("/api/model-battle", async (req, res) => {
 });
 
 // ===================================================================
+// DAILY CHALLENGE - Get Challenge of the Day
+// ===================================================================
+
+app.get("/api/daily-challenge", async (req, res) => {
+  try {
+    // Get current date (UTC) as seed for challenge
+    const today = new Date();
+    const dateString = today.toISOString().split('T')[0]; // YYYY-MM-DD
+    
+    console.log(`\n🎯 Fetching Daily Challenge for ${dateString}`);
+
+    // Generate challenge based on date (same challenge for everyone on same day)
+    const systemPrompt = `Du bist ein KI-Challenge-Designer. Erstelle eine tägliche KI-Challenge für das Datum ${dateString}.
+
+Die Challenge sollte:
+1. Praktisch und im echten Leben nützlich sein
+2. In 10-15 Minuten lösbar sein
+3. Kreativität fördern
+4. Klare Bewertungskriterien haben
+
+Erstelle eine Challenge mit 3 Schwierigkeitsgraden:
+- **Beginner**: Einfach, klare Struktur, wenig Erfahrung nötig
+- **Intermediate**: Moderater Anspruch, etwas strategisches Denken
+- **Expert**: Komplex, erfordert tiefes Verständnis
+
+Antworte NUR mit einem JSON-Objekt, keine zusätzlichen Erklärungen.`;
+
+    const userPrompt = `Erstelle eine Daily Challenge im folgenden Format:
+
+{
+  "date": "${dateString}",
+  "theme": "Kurzes Thema (z.B. 'Content Creation', 'Problem Solving')",
+  "challenges": {
+    "beginner": {
+      "title": "Challenge Titel",
+      "description": "Was soll gemacht werden? (2-3 Sätze)",
+      "task": "Konkrete Aufgabe",
+      "hint": "Hilfreicher Tipp",
+      "estimatedTime": "10 Min"
+    },
+    "intermediate": {
+      "title": "Challenge Titel",
+      "description": "Was soll gemacht werden? (2-3 Sätze)",
+      "task": "Konkrete Aufgabe",
+      "hint": "Hilfreicher Tipp",
+      "estimatedTime": "12 Min"
+    },
+    "expert": {
+      "title": "Challenge Titel",
+      "description": "Was soll gemacht werden? (2-3 Sätze)",
+      "task": "Konkrete Aufgabe",
+      "hint": "Hilfreicher Tipp",
+      "estimatedTime": "15 Min"
+    }
+  }
+}
+
+Sei kreativ! Wechsle zwischen verschiedenen Themen: Content, Strategie, Analyse, Kommunikation, etc.`;
+
+    const message = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 2000,
+      messages: [{
+        role: "user",
+        content: `${systemPrompt}\n\n${userPrompt}`
+      }]
+    });
+
+    const responseText = message.content[0].text;
+    
+    // Extract JSON from response
+    let challenge;
+    try {
+      challenge = JSON.parse(responseText);
+    } catch (e) {
+      const jsonMatch = responseText.match(/```json\n([\s\S]+?)\n```/);
+      if (jsonMatch) {
+        challenge = JSON.parse(jsonMatch[1]);
+      } else {
+        const objectMatch = responseText.match(/{[\s\S]+}/);
+        if (objectMatch) {
+          challenge = JSON.parse(objectMatch[0]);
+        } else {
+          throw new Error("Could not parse JSON from response");
+        }
+      }
+    }
+
+    console.log(`✅ Generated challenge: "${challenge.theme}"`);
+
+    res.json({
+      success: true,
+      challenge,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error("Error generating daily challenge:", error);
+    res.status(500).json({
+      error: "Failed to generate daily challenge",
+      message: error.message
+    });
+  }
+});
+
+// ===================================================================
+// DAILY CHALLENGE - Submit & Evaluate Answer
+// ===================================================================
+
+app.post("/api/submit-challenge", async (req, res) => {
+  try {
+    const { difficulty, task, answer } = req.body;
+
+    if (!difficulty || !task || !answer) {
+      return res.status(400).json({ 
+        error: "Missing required fields: difficulty, task, answer" 
+      });
+    }
+
+    if (answer.trim().length < 20) {
+      return res.status(400).json({ 
+        error: "Answer too short (minimum 20 characters)" 
+      });
+    }
+
+    console.log(`\n🏆 Evaluating ${difficulty} challenge submission...`);
+
+    const systemPrompt = `Du bist ein KI-Challenge-Bewerter. Bewerte die eingereichte Antwort auf eine Daily Challenge.
+
+Bewertungskriterien:
+- **Relevanz**: Passt die Antwort zur Aufgabe?
+- **Qualität**: Ist die Antwort durchdacht und gut strukturiert?
+- **Kreativität**: Zeigt die Antwort originelles Denken?
+- **Vollständigkeit**: Wurden alle Aspekte der Aufgabe erfüllt?
+
+Badge-Vergabe:
+- **Bronze (60-74%)**: Grundlegende Anforderungen erfüllt, aber Verbesserungspotenzial
+- **Silver (75-89%)**: Gute Qualität, durchdacht, erfüllt Anforderungen gut
+- **Gold (90-100%)**: Exzellent, kreativ, professionell, übertrifft Erwartungen
+
+Antworte NUR mit einem JSON-Objekt, keine zusätzlichen Erklärungen.`;
+
+    const userPrompt = `Aufgabe (${difficulty}): "${task}"
+
+Eingereichte Antwort:
+"${answer}"
+
+Bewerte die Antwort und erstelle ein JSON-Objekt:
+{
+  "score": 85,
+  "badge": "silver",
+  "feedback": {
+    "positive": ["Was wurde gut gemacht?", "Stärken der Antwort"],
+    "improvements": ["Was könnte besser sein?", "Verbesserungsvorschläge"]
+  },
+  "summary": "Kurze 1-2 Satz Zusammenfassung der Bewertung"
+}`;
+
+    const message = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 1500,
+      messages: [{
+        role: "user",
+        content: `${systemPrompt}\n\n${userPrompt}`
+      }]
+    });
+
+    const responseText = message.content[0].text;
+    
+    // Extract JSON from response
+    let evaluation;
+    try {
+      evaluation = JSON.parse(responseText);
+    } catch (e) {
+      const jsonMatch = responseText.match(/```json\n([\s\S]+?)\n```/);
+      if (jsonMatch) {
+        evaluation = JSON.parse(jsonMatch[1]);
+      } else {
+        const objectMatch = responseText.match(/{[\s\S]+}/);
+        if (objectMatch) {
+          evaluation = JSON.parse(objectMatch[0]);
+        } else {
+          throw new Error("Could not parse JSON from response");
+        }
+      }
+    }
+
+    console.log(`✅ Evaluation complete: ${evaluation.badge.toUpperCase()} (${evaluation.score}%)`);
+
+    res.json({
+      success: true,
+      evaluation,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error("Error evaluating challenge:", error);
+    res.status(500).json({
+      error: "Failed to evaluate challenge",
+      message: error.message
+    });
+  }
+});
+
+// ===================================================================
 // START SERVER
 // ===================================================================
 
@@ -870,5 +1069,5 @@ app.listen(PORT, () => {
   console.log(`📍 Environment: ${process.env.NODE_ENV || "development"}`);
   console.log(`🤖 Claude Model: ${MODEL}`);
   console.log(`📚 Featured Prompts: ${FEATURED_PROMPTS.length}`);
-  console.log(`✨ Features: Generator + Optimizer + Library + ${OPENAI_AVAILABLE ? "Battle (enabled)" : "Battle (disabled)"}\n`);
+  console.log(`✨ Features: Generator + Optimizer + Library + Battle + Daily Challenge\n`);
 });
