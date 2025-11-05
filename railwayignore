@@ -1,0 +1,48 @@
+# Railway Ignore - Nur Node.js Backend nutzen
+
+# Old API structure (completely removed)
+api/
+share.llm.js
+*.llm.js
+
+# Development
+node_modules/
+.next/
+dist/
+build/
+.cache/
+
+# Environment
+.env
+.env.local
+.env.*
+
+# Git
+.git/
+.github/
+.gitignore
+
+# Videos
+videos/
+*.mp4
+*.webm
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+*.test.js
+*.spec.js
+__tests__/
