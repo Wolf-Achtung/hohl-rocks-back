@@ -1,6 +1,8 @@
 // server.js - Vollständiges Backend für hohl.rocks mit LLM-Integration
 import express from 'express';
 import cors from 'cors';
+import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 
 const app = express();
 
@@ -25,11 +27,24 @@ console.log('[SERVER] ALLOWED_ORIGINS:', ALLOWED_ORIGINS);
 const hasOpenAI = !!process.env.OPENAI_API_KEY;
 const hasAnthropic = !!process.env.ANTHROPIC_API_KEY;
 const hasOpenRouter = !!process.env.OPENROUTER_API_KEY;
+const hasPerplexity = !!process.env.PERPLEXITY_API_KEY;
 
 console.log('[SERVER] API Keys Status:');
 console.log('  - OpenAI:', hasOpenAI ? '✅' : '❌');
 console.log('  - Anthropic:', hasAnthropic ? '✅' : '❌');
 console.log('  - OpenRouter:', hasOpenRouter ? '✅' : '❌');
+console.log('  - Perplexity:', hasPerplexity ? '✅' : '❌');
+
+// Initialize API Clients
+const anthropic = hasAnthropic ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) : null;
+const openai = hasOpenAI ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+
+// ==================== FEATURE #2: MODEL BATTLE LEADERBOARD ====================
+let battleLeaderboard = {
+  'claude-sonnet-4': { wins: 0, totalSpeed: 0, battles: 0 },
+  'gpt-4o-mini': { wins: 0, totalSpeed: 0, battles: 0 },
+  'sonar-pro': { wins: 0, totalSpeed: 0, battles: 0 }
+};
 
 // Middleware
 app.use(cors({ 
@@ -163,14 +178,15 @@ app.get('/', (req, res) => {
   res.json({ 
     status: 'ok',
     message: 'hohl.rocks Backend API',
-    version: '2.1.0',
+    version: '3.0.0',
     timestamp: new Date().toISOString(),
     port: PORT,
     environment: NODE_ENV,
     apis: {
       openai: hasOpenAI,
       anthropic: hasAnthropic,
-      openrouter: hasOpenRouter
+      openrouter: hasOpenRouter,
+      perplexity: hasPerplexity
     },
     endpoints: [
       'GET /health',
@@ -180,7 +196,10 @@ app.get('/', (req, res) => {
       'GET /api/tips',
       'POST /api/complete',
       'POST /api/prompt-generator',
-      'POST /api/prompt-optimizer'
+      'POST /api/prompt-optimizer',
+      'POST /api/model-battle (SSE)',
+      'POST /api/model-battle/vote',
+      'GET /api/model-battle/leaderboard'
     ]
   });
 });
@@ -195,7 +214,8 @@ app.get('/health', (req, res) => {
     apis: {
       openai: hasOpenAI,
       anthropic: hasAnthropic,
-      openrouter: hasOpenRouter
+      openrouter: hasOpenRouter,
+      perplexity: hasPerplexity
     }
   });
 });
@@ -207,7 +227,7 @@ app.get('/api/self', (req, res) => {
   console.log('[API] /api/self called');
   res.status(200).json({
     ok: true,
-    version: '2.1.0',
+    version: '3.0.0',
     timestamp: new Date().toISOString(),
     ui: {
       modalShade: 0.6,
@@ -223,7 +243,8 @@ app.get('/api/self', (req, res) => {
     apis: {
       openai: hasOpenAI,
       anthropic: hasAnthropic,
-      openrouter: hasOpenRouter
+      openrouter: hasOpenRouter,
+      perplexity: hasPerplexity
     }
   });
 });
@@ -270,203 +291,115 @@ const sparkTips = [
 app.get('/api/spark/today', async (req, res) => {
   console.log('[API] /api/spark/today called');
   
-  const today = new Date();
-  const dayIndex = today.getDate() % sparkTips.length;
-  const staticTip = sparkTips[dayIndex];
+  const date = new Date().toISOString().split('T')[0];
+  const tipIndex = new Date().getDate() % sparkTips.length;
+  const baseTip = sparkTips[tipIndex];
   
-  // Versuche dynamischen Content zu generieren
-  if (hasAnthropic || hasOpenAI) {
-    try {
-      const prompt = `Generiere einen kurzen, prägnanten KI-Tipp für deutsche Unternehmer.
-Themenbereich: ${staticTip.type}
-Format: Titel (max 6 Wörter) + Text (max 120 Zeichen)
-Stil: Praktisch, konkret, umsetzbar
-Sprache: Deutsch`;
-      
-      const generated = await completeText(prompt, {
-        system: 'Du bist ein KI-Experte der präzise, umsetzbare Tipps gibt.',
-        provider: hasAnthropic ? 'anthropic' : 'openai'
-      });
-      
-      if (generated && generated.length > 20) {
-        // Parse generated content
-        const lines = generated.split('\n').filter(l => l.trim());
-        const title = lines[0]?.replace(/^(Titel:|Title:)/i, '').trim() || staticTip.title;
-        const text = lines[1]?.replace(/^(Text:|Tipp:)/i, '').trim() || staticTip.text;
-        
-        return res.json({
-          title,
-          text,
-          date: today.toISOString().split('T')[0],
-          source: 'dynamic',
-          type: staticTip.type
-        });
-      }
-    } catch (error) {
-      console.error('[SPARK] Dynamic generation failed:', error.message);
-    }
-  }
-  
-  // Fallback auf statischen Content
-  res.json({
-    title: staticTip.title,
-    text: staticTip.text,
-    date: today.toISOString().split('T')[0],
-    source: 'static',
-    type: staticTip.type
-  });
-});
-
-// API: News Feed
-const newsItems = [
-  {
-    title: 'EU AI Act – Neue Regelungen ab 2024',
-    url: 'https://digital-strategy.ec.europa.eu/en/policies/european-ai-act',
-    summary: 'Die EU führt umfassende Regelungen für KI-Systeme ein. Unternehmen müssen Risikostufen bewerten und Transparenzpflichten erfüllen.',
-    source: 'EU Commission',
-    date: '2024-10-15'
-  },
-  {
-    title: 'OpenAI stellt GPT-5 vor',
-    url: 'https://openai.com/blog',
-    summary: 'Neue Multimodal-Fähigkeiten und verbesserte Reasoning-Kapazitäten charakterisieren die nächste Generation.',
-    source: 'OpenAI',
-    date: '2024-11-01'
-  },
-  {
-    title: 'Claude 3.5 Sonnet Update',
-    url: 'https://anthropic.com/news',
-    summary: 'Anthropic verbessert die Coding-Fähigkeiten und führt neue Safety-Features ein.',
-    source: 'Anthropic',
-    date: '2024-10-28'
-  },
-  {
-    title: 'Google Gemini 2.0 Release',
-    url: 'https://deepmind.google/technologies/gemini/',
-    summary: 'Erweiterte Context-Windows und native Tool-Verwendung machen Gemini zum Konkurrenten.',
-    source: 'Google DeepMind',
-    date: '2024-11-03'
-  }
-];
-
-app.get('/api/news', (req, res) => {
-  console.log('[API] /api/news called');
-  const { limit = 10, source } = req.query;
-  
-  let filtered = newsItems;
-  if (source) {
-    filtered = filtered.filter(item => 
-      item.source.toLowerCase().includes(source.toLowerCase())
-    );
-  }
-  
-  res.json({
-    items: filtered.slice(0, parseInt(limit)),
-    total: filtered.length,
-    timestamp: new Date().toISOString()
-  });
-});
-
-// API: Tips
-const tips = [
-  {
-    id: 'prompt-basics',
-    title: 'AI Prompt Engineering Basics',
-    category: 'Praxis',
-    problem: 'Unklare Prompts liefern unzuverlässige Ergebnisse.',
-    solution: 'Nutze Rollen, Ziel, Format und Qualitätskriterien. Baue Beispiele ein.',
-    prompt: 'Rolle: Du bist ein präziser technischer Redakteur.\nZiel: Erkläre [Thema] verständlich für Einsteiger.\nFormat: Überschrift, 3 Bulletpoints, 1 Beispiel.\nQualität: Korrigiere Fachfehler, nenne Quellenideen.',
-    tags: ['Prompting', 'Best Practice']
-  },
-  {
-    id: 'claude-best',
-    title: 'Claude 3.5 Sonnet Best Practices',
-    category: 'Effizienz',
-    problem: 'Sonnet liefert viel Text, aber nicht die gewünschte Struktur.',
-    solution: 'Definiere strukturierte Ausgaben (JSON/Markdown) und nutze Follow-up-Refinement.',
-    prompt: 'Du bist ein strukturierter KI-Analyst. Erzeuge eine Markdown-Checkliste zu [Aufgabe] mit: Ziel, Schritte, Risiken, Zeitbedarf.',
-    tags: ['Claude', 'Struktur']
-  },
-  {
-    id: 'eu-ai-act',
-    title: 'EU AI Act – Was Sie wissen müssen',
-    category: 'Compliance',
-    problem: 'Neue Pflichten für KI-Anbieter sind unklar.',
-    solution: 'Stufe eigene Systeme ein (Risiko-Level), implementiere Transparenz, dokumentiere Tests.',
-    prompt: 'Fasse die Pflichten für [Use Case] nach EU AI Act zusammen (5 Punkte), inkl. Risikostufe & To-do-Liste.',
-    tags: ['Regulierung', 'Legal']
-  }
-];
-
-app.get('/api/tips', (req, res) => {
-  console.log('[API] /api/tips called');
-  res.json({
-    items: tips,
-    total: tips.length,
-    timestamp: new Date().toISOString()
-  });
-});
-
-// API: LLM Completion Endpoint
-app.post('/api/complete', async (req, res) => {
-  console.log('[API] /api/complete called');
-  
-  const { prompt, system, provider, euOnly } = req.body;
-  
-  if (!prompt) {
-    return res.status(400).json({
-      error: 'missing_prompt',
-      message: 'Prompt is required'
-    });
-  }
-  
-  // Check if any LLM is available
-  if (!hasOpenAI && !hasAnthropic && !hasOpenRouter) {
-    return res.status(503).json({
-      error: 'no_llm_available',
-      message: 'Keine LLM-APIs konfiguriert. Bitte API-Keys setzen.'
+  if (!hasAnthropic && !hasOpenAI) {
+    return res.json({
+      title: baseTip.title,
+      text: baseTip.text,
+      type: baseTip.type,
+      date,
+      fallback: true
     });
   }
   
   try {
-    const result = await completeText(prompt, { system, provider, euOnly });
+    const prompt = `Erstelle einen prägnanten, inspirie renden KI-Tipp für heute zum Thema "${baseTip.title}".
+Fokus: ${baseTip.type === 'prompt' ? 'Prompt Engineering' : baseTip.type === 'insight' ? 'KI-Insights' : baseTip.type === 'tool' ? 'KI-Tools' : 'KI-Förderung'}
+Max. 2 Sätze, praktisch & actionable.`;
     
-    if (!result) {
-      return res.status(500).json({
-        error: 'completion_failed',
-        message: 'LLM konnte keine Antwort generieren.'
-      });
-    }
+    const dynamicText = await completeText(prompt, { maxTokens: 150 });
     
     res.json({
-      result,
-      timestamp: new Date().toISOString(),
-      provider: pickProvider({ provider, euOnly })
+      title: baseTip.title,
+      text: dynamicText || baseTip.text,
+      type: baseTip.type,
+      date,
+      dynamic: !!dynamicText,
+      fallback: !dynamicText
     });
   } catch (error) {
-    console.error('[COMPLETE] Error:', error);
-    res.status(500).json({
-      error: 'internal_error',
-      message: error.message
+    console.error('[SPARK] Error:', error);
+    res.json({
+      title: baseTip.title,
+      text: baseTip.text,
+      type: baseTip.type,
+      date,
+      fallback: true,
+      error: error.message
     });
   }
 });
 
+// API: KI-News
+app.get('/api/news', (req, res) => {
+  console.log('[API] /api/news called');
+  
+  const newsItems = [
+    {
+      id: 'n1',
+      title: 'EU AI Act tritt in Kraft',
+      summary: 'Erste KI-Verordnung weltweit setzt neue Standards für KI-Systeme in Europa.',
+      date: '2024-08-01',
+      source: 'EU Commission'
+    },
+    {
+      id: 'n2',
+      title: 'Claude 4 veröffentlicht',
+      summary: 'Anthropic präsentiert Claude 4 mit verbessertem Reasoning und 200k Context.',
+      date: '2024-11-05',
+      source: 'Anthropic'
+    },
+    {
+      id: 'n3',
+      title: 'DSGVO-konforme KI-Tools',
+      summary: 'Neue Richtlinien für datenschutzkonforme KI-Implementierung in Deutschland.',
+      date: '2024-10-15',
+      source: 'BSI'
+    }
+  ];
+  
+  res.json(newsItems);
+});
+
+// API: KI-Tips
+app.get('/api/tips', (req, res) => {
+  console.log('[API] /api/tips called');
+  res.json(sparkTips);
+});
+
+// API: Complete (Generic LLM Endpoint)
+app.post('/api/complete', async (req, res) => {
+  console.log('[API] /api/complete called');
+  
+  const { prompt, system, provider, euOnly, maxTokens } = req.body;
+  
+  if (!prompt) {
+    return res.status(400).json({ error: 'missing_prompt' });
+  }
+  
+  const result = await completeText(prompt, { system, provider, euOnly, maxTokens });
+  
+  if (!result) {
+    return res.status(503).json({ error: 'no_llm_available' });
+  }
+  
+  res.json({ result });
+});
+
 // ==================== PROMPT GENERATOR API ====================
 
-/**
- * Live Prompt Generator - Generates 5 different prompt styles
- */
 app.post('/api/prompt-generator', async (req, res) => {
   console.log('[API] /api/prompt-generator called');
   
   const { topic } = req.body;
   
-  // Validation
   if (!topic || typeof topic !== 'string') {
     return res.status(400).json({
       error: 'missing_topic',
-      message: 'Topic is required and must be a string'
+      message: 'Topic is required'
     });
   }
   
@@ -486,132 +419,111 @@ app.post('/api/prompt-generator', async (req, res) => {
     });
   }
   
-  // Check if LLM is available
   if (!hasAnthropic && !hasOpenAI) {
-    return res.status(503).json({
-      error: 'no_llm_available',
-      message: 'Keine LLM-APIs konfiguriert für Prompt-Generierung'
-    });
-  }
-  
-  try {
-    const systemPrompt = `Du bist ein Expert Prompt Engineer. 
-Deine Aufgabe ist es, für ein gegebenes Thema 5 verschiedene Prompt-Styles zu generieren.
-
-Die 5 Styles sind:
-1. EXECUTIVE: Business-fokussiert, strategisch, ROI-orientiert
-2. TECHNICAL: Entwickler-friendly, präzise, implementation-ready
-3. CREATIVE: Out-of-the-box, innovative Perspektiven, unkonventionell
-4. TUTORIAL: Step-by-step, pädagogisch, für Anfänger geeignet
-5. EXPERT: Deep-dive, fortgeschritten, nuanciert
-
-Jeder Prompt sollte:
-- 2-4 Sätze lang sein
-- Konkret und actionable
-- Den spezifischen Style widerspiegeln
-- Sofort verwendbar sein
-
-Antworte NUR mit einem JSON Array, ohne zusätzlichen Text:
-[
-  {
-    "name": "Executive",
-    "prompt": "...",
-    "description": "Business-strategische Perspektive"
-  },
-  {
-    "name": "Technical",
-    "prompt": "...",
-    "description": "Entwickler-fokussierte Analyse"
-  },
-  {
-    "name": "Creative",
-    "prompt": "...",
-    "description": "Innovative Perspektiven"
-  },
-  {
-    "name": "Tutorial",
-    "prompt": "...",
-    "description": "Pädagogischer Ansatz"
-  },
-  {
-    "name": "Expert",
-    "prompt": "...",
-    "description": "Deep-dive Analyse"
-  }
-]`;
-
-    const userPrompt = `Generiere 5 Prompt-Styles für das Thema: "${cleanTopic}"`;
-    
-    const result = await completeText(userPrompt, {
-      system: systemPrompt,
-      provider: hasAnthropic ? 'anthropic' : 'openai',
-      maxTokens: 2000
-    });
-    
-    if (!result) {
-      throw new Error('LLM returned empty result');
-    }
-    
-    // Parse JSON from result
-    let cleanedResult = result.trim();
-    
-    // Remove markdown code blocks if present
-    if (cleanedResult.includes('```json')) {
-      cleanedResult = cleanedResult.split('```json')[1].split('```')[0].trim();
-    } else if (cleanedResult.includes('```')) {
-      cleanedResult = cleanedResult.split('```')[1].split('```')[0].trim();
-    }
-    
-    let styles;
-    try {
-      styles = JSON.parse(cleanedResult);
-    } catch (parseError) {
-      console.error('[PROMPT-GEN] JSON Parse Error:', parseError);
-      // Fallback to static prompts
-      throw new Error('JSON parsing failed');
-    }
-    
-    // Add icons to styles
-    const iconMapping = {
-      'Executive': '💼',
-      'Technical': '⚙️',
-      'Creative': '🎨',
-      'Tutorial': '📚',
-      'Expert': '🎓'
-    };
-    
-    const enrichedStyles = styles.map(style => ({
-      ...style,
-      icon: iconMapping[style.name] || '✨'
-    }));
-    
-    res.json({
-      topic: cleanTopic,
-      styles: enrichedStyles,
-      timestamp: new Date().toISOString()
-    });
-    
-  } catch (error) {
-    console.error('[PROMPT-GEN] Error:', error);
-    
-    // Fallback: Static prompts
     const fallbackStyles = [
       {
         name: 'Executive',
-        prompt: `Analysiere ${cleanTopic} aus geschäftsstrategischer Sicht. Welche ROI-Potenziale, Marktchancen und Wettbewerbsvorteile ergeben sich?`,
-        description: 'Business-strategische Perspektive',
+        prompt: `Analysiere die strategischen Business-Implikationen von ${cleanTopic} für C-Level Entscheidungsträger.`,
+        description: 'Business-strategisch',
         icon: '💼'
       },
       {
         name: 'Technical',
-        prompt: `Erkläre die technische Implementation von ${cleanTopic}. Welche Technologien, APIs und Best Practices sind relevant?`,
-        description: 'Entwickler-fokussierte Analyse',
+        prompt: `Erkläre die technische Implementierung und Architektur von ${cleanTopic} mit Code-Beispielen.`,
+        description: 'Entwickler-fokussiert',
         icon: '⚙️'
       },
       {
         name: 'Creative',
-        prompt: `Betrachte ${cleanTopic} aus unkonventionellen Blickwinkeln. Welche überraschenden Anwendungen oder Kombinationen sind möglich?`,
-        description: 'Innovative Perspektiven',
+        prompt: `Entwickle 5 innovative, out-of-the-box Ideen wie ${cleanTopic} disruptiv eingesetzt werden kann.`,
+        description: 'Innovativ & Kreativ',
+        icon: '🎨'
+      },
+      {
+        name: 'Tutorial',
+        prompt: `Erstelle eine Schritt-für-Schritt Anleitung zu ${cleanTopic}. Wie kann ein Anfänger damit starten?`,
+        description: 'Pädagogischer Ansatz',
+        icon: '📚'
+      },
+      {
+        name: 'Expert',
+        prompt: `Analysiere ${cleanTopic} auf Expertenniveau. Welche subtilen Nuancen, fortgeschrittenen Patterns und Edge Cases gibt es?`,
+        description: 'Deep-dive Analyse',
+        icon: '🎓'
+      }
+    ];
+    
+    return res.json({
+      topic: cleanTopic,
+      styles: fallbackStyles,
+      timestamp: new Date().toISOString(),
+      fallback: true
+    });
+  }
+  
+  try {
+    const systemPrompt = `Du bist ein Expert Prompt Engineer. Erstelle 5 verschiedene Prompt-Styles für das Thema.
+Jeder Style soll einen anderen Blickwinkel bieten.
+
+Antworte NUR mit folgendem JSON Format (ohne Markdown):
+{
+  "styles": [
+    {
+      "name": "Executive",
+      "prompt": "Der komplette Prompt hier...",
+      "description": "Kurze Beschreibung",
+      "icon": "💼"
+    }
+  ]
+}
+
+Die 5 Styles sind:
+1. Executive (💼) - Business/C-Level Perspektive
+2. Technical (⚙️) - Entwickler/Implementation
+3. Creative (🎨) - Innovative Ansätze
+4. Tutorial (📚) - Anfänger-freundlich
+5. Expert (🎓) - Deep-dive Analyse`;
+
+    const result = await completeText(
+      `Erstelle 5 Prompt-Styles für: ${cleanTopic}`,
+      { system: systemPrompt, maxTokens: 1500 }
+    );
+    
+    if (!result) throw new Error('LLM returned empty');
+    
+    let cleaned = result.trim();
+    if (cleaned.includes('```json')) {
+      cleaned = cleaned.split('```json')[1].split('```')[0].trim();
+    }
+    
+    const parsed = JSON.parse(cleaned);
+    
+    res.json({
+      topic: cleanTopic,
+      styles: parsed.styles || [],
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('[GENERATOR] Error:', error);
+    
+    const fallbackStyles = [
+      {
+        name: 'Executive',
+        prompt: `Analysiere die strategischen Business-Implikationen von ${cleanTopic} für C-Level Entscheidungsträger.`,
+        description: 'Business-strategisch',
+        icon: '💼'
+      },
+      {
+        name: 'Technical',
+        prompt: `Erkläre die technische Implementierung und Architektur von ${cleanTopic} mit Code-Beispielen.`,
+        description: 'Entwickler-fokussiert',
+        icon: '⚙️'
+      },
+      {
+        name: 'Creative',
+        prompt: `Entwickle 5 innovative, out-of-the-box Ideen wie ${cleanTopic} disruptiv eingesetzt werden kann.`,
+        description: 'Innovativ & Kreativ',
         icon: '🎨'
       },
       {
@@ -639,16 +551,11 @@ Antworte NUR mit einem JSON Array, ohne zusätzlichen Text:
 
 // ==================== PROMPT OPTIMIZER API ====================
 
-/**
- * Prompt Optimizer - Analyzes and improves user prompts
- * Takes a "bad" prompt and returns an improved version with score and explanations
- */
 app.post('/api/prompt-optimizer', async (req, res) => {
   console.log('[API] /api/prompt-optimizer called');
   
   const { prompt } = req.body;
   
-  // Validation
   if (!prompt || typeof prompt !== 'string') {
     return res.status(400).json({
       error: 'missing_prompt',
@@ -672,7 +579,6 @@ app.post('/api/prompt-optimizer', async (req, res) => {
     });
   }
   
-  // Check if LLM is available
   if (!hasAnthropic && !hasOpenAI) {
     return res.status(503).json({
       error: 'no_llm_available',
@@ -731,10 +637,8 @@ WICHTIG:
       throw new Error('LLM returned empty result');
     }
     
-    // Parse JSON from result
     let cleanedResult = result.trim();
     
-    // Remove markdown code blocks if present
     if (cleanedResult.includes('```json')) {
       cleanedResult = cleanedResult.split('```json')[1].split('```')[0].trim();
     } else if (cleanedResult.includes('```')) {
@@ -749,7 +653,6 @@ WICHTIG:
       throw new Error('JSON parsing failed');
     }
     
-    // Validate scores
     if (analysis.original_score < 1 || analysis.original_score > 10) {
       analysis.original_score = Math.max(1, Math.min(10, analysis.original_score));
     }
@@ -771,7 +674,6 @@ WICHTIG:
   } catch (error) {
     console.error('[OPTIMIZER] Error:', error);
     
-    // Fallback: Basic improvement
     const fallbackAnalysis = {
       original_prompt: cleanPrompt,
       original_score: 4,
@@ -809,6 +711,383 @@ Qualität: Präzise, faktentreu und hilfreich`,
   }
 });
 
+// ==================== FEATURE #2: MODEL BATTLE ARENA ====================
+
+/**
+ * POST /api/model-battle
+ * Server-Sent Events (SSE) Stream für parallele LLM-Antworten
+ */
+app.post('/api/model-battle', async (req, res) => {
+  console.log('🥊 Model Battle started');
+  
+  const { prompt } = req.body;
+
+  // Validation
+  if (!prompt || typeof prompt !== 'string') {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Prompt ist erforderlich' 
+    });
+  }
+
+  if (prompt.length > 500) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Prompt zu lang (max 500 Zeichen)' 
+    });
+  }
+
+  // Setup SSE
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const sendEvent = (data) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  // Track timing
+  const startTimes = {
+    claude: Date.now(),
+    openai: Date.now(),
+    perplexity: Date.now()
+  };
+
+  const endTimes = {
+    claude: null,
+    openai: null,
+    perplexity: null
+  };
+
+  const responses = {
+    claude: '',
+    openai: '',
+    perplexity: ''
+  };
+
+  // ========================================
+  // 1. CLAUDE STREAM
+  // ========================================
+  const claudeStream = async () => {
+    try {
+      sendEvent({ 
+        type: 'status', 
+        model: 'claude', 
+        message: 'Claude Sonnet 4 startet...' 
+      });
+
+      if (!anthropic) {
+        throw new Error('Anthropic API not configured');
+      }
+
+      const stream = await anthropic.messages.create({
+        model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages: [{ 
+          role: 'user', 
+          content: prompt 
+        }],
+        stream: true
+      });
+
+      for await (const chunk of stream) {
+        if (chunk.type === 'content_block_delta' && 
+            chunk.delta?.type === 'text_delta') {
+          
+          const text = chunk.delta.text;
+          responses.claude += text;
+          
+          sendEvent({
+            type: 'chunk',
+            model: 'claude',
+            text: text,
+            fullText: responses.claude
+          });
+        }
+      }
+
+      endTimes.claude = Date.now();
+      const speed = ((endTimes.claude - startTimes.claude) / 1000).toFixed(2);
+
+      sendEvent({
+        type: 'complete',
+        model: 'claude',
+        speed: speed,
+        text: responses.claude
+      });
+
+      console.log(`✅ Claude finished in ${speed}s`);
+
+    } catch (error) {
+      console.error('❌ Claude error:', error);
+      sendEvent({
+        type: 'error',
+        model: 'claude',
+        error: 'Claude hat nicht geantwortet'
+      });
+      responses.claude = '❌ Fehler bei Claude';
+      endTimes.claude = Date.now();
+    }
+  };
+
+  // ========================================
+  // 2. OPENAI STREAM
+  // ========================================
+  const openaiStream = async () => {
+    try {
+      sendEvent({ 
+        type: 'status', 
+        model: 'openai', 
+        message: 'GPT-4 startet...' 
+      });
+
+      if (!openai) {
+        throw new Error('OpenAI API not configured');
+      }
+
+      const stream = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        messages: [{ 
+          role: 'user', 
+          content: prompt 
+        }],
+        max_tokens: 1000,
+        stream: true
+      });
+
+      for await (const chunk of stream) {
+        const text = chunk.choices[0]?.delta?.content || '';
+        if (text) {
+          responses.openai += text;
+          
+          sendEvent({
+            type: 'chunk',
+            model: 'openai',
+            text: text,
+            fullText: responses.openai
+          });
+        }
+      }
+
+      endTimes.openai = Date.now();
+      const speed = ((endTimes.openai - startTimes.openai) / 1000).toFixed(2);
+
+      sendEvent({
+        type: 'complete',
+        model: 'openai',
+        speed: speed,
+        text: responses.openai
+      });
+
+      console.log(`✅ OpenAI finished in ${speed}s`);
+
+    } catch (error) {
+      console.error('❌ OpenAI error:', error);
+      sendEvent({
+        type: 'error',
+        model: 'openai',
+        error: 'GPT-4 hat nicht geantwortet'
+      });
+      responses.openai = '❌ Fehler bei GPT-4';
+      endTimes.openai = Date.now();
+    }
+  };
+
+  // ========================================
+  // 3. PERPLEXITY STREAM
+  // ========================================
+  const perplexityStream = async () => {
+    try {
+      sendEvent({ 
+        type: 'status', 
+        model: 'perplexity', 
+        message: 'Perplexity Sonar Pro startet...' 
+      });
+
+      if (!hasPerplexity) {
+        throw new Error('Perplexity API not configured');
+      }
+
+      const response = await fetch('https://api.perplexity.ai/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.PERPLEXITY_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: process.env.PERPLEXITY_MODEL || 'sonar-pro',
+          messages: [{ 
+            role: 'user', 
+            content: prompt 
+          }],
+          max_tokens: 1000,
+          stream: true
+        })
+      });
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n').filter(line => line.trim());
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            if (data === '[DONE]') continue;
+
+            try {
+              const json = JSON.parse(data);
+              const text = json.choices[0]?.delta?.content || '';
+              
+              if (text) {
+                responses.perplexity += text;
+                
+                sendEvent({
+                  type: 'chunk',
+                  model: 'perplexity',
+                  text: text,
+                  fullText: responses.perplexity
+                });
+              }
+            } catch (e) {
+              // Skip parsing errors
+            }
+          }
+        }
+      }
+
+      endTimes.perplexity = Date.now();
+      const speed = ((endTimes.perplexity - startTimes.perplexity) / 1000).toFixed(2);
+
+      sendEvent({
+        type: 'complete',
+        model: 'perplexity',
+        speed: speed,
+        text: responses.perplexity
+      });
+
+      console.log(`✅ Perplexity finished in ${speed}s`);
+
+    } catch (error) {
+      console.error('❌ Perplexity error:', error);
+      sendEvent({
+        type: 'error',
+        model: 'perplexity',
+        error: 'Perplexity hat nicht geantwortet'
+      });
+      responses.perplexity = '❌ Fehler bei Perplexity';
+      endTimes.perplexity = Date.now();
+    }
+  };
+
+  // ========================================
+  // PARALLEL EXECUTION
+  // ========================================
+  try {
+    // Start all 3 streams parallel
+    await Promise.all([
+      claudeStream(),
+      openaiStream(),
+      perplexityStream()
+    ]);
+
+    // All done - send final summary
+    sendEvent({
+      type: 'battle-complete',
+      speeds: {
+        claude: ((endTimes.claude - startTimes.claude) / 1000).toFixed(2),
+        openai: ((endTimes.openai - startTimes.openai) / 1000).toFixed(2),
+        perplexity: ((endTimes.perplexity - startTimes.perplexity) / 1000).toFixed(2)
+      },
+      responses: {
+        claude: responses.claude,
+        openai: responses.openai,
+        perplexity: responses.perplexity
+      }
+    });
+
+    console.log('🎉 Battle complete!');
+    res.end();
+
+  } catch (error) {
+    console.error('❌ Battle error:', error);
+    sendEvent({
+      type: 'error',
+      error: 'Battle konnte nicht abgeschlossen werden'
+    });
+    res.end();
+  }
+});
+
+/**
+ * POST /api/model-battle/vote
+ * User voting für Leaderboard
+ */
+app.post('/api/model-battle/vote', async (req, res) => {
+  const { winner, speeds } = req.body;
+
+  if (!winner || !['claude-sonnet-4', 'gpt-4o-mini', 'sonar-pro'].includes(winner)) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Invalid winner' 
+    });
+  }
+
+  // Update Leaderboard
+  battleLeaderboard[winner].wins += 1;
+
+  // Update speeds
+  if (speeds) {
+    if (speeds.claude) {
+      battleLeaderboard['claude-sonnet-4'].totalSpeed += parseFloat(speeds.claude);
+      battleLeaderboard['claude-sonnet-4'].battles += 1;
+    }
+    if (speeds.openai) {
+      battleLeaderboard['gpt-4o-mini'].totalSpeed += parseFloat(speeds.openai);
+      battleLeaderboard['gpt-4o-mini'].battles += 1;
+    }
+    if (speeds.perplexity) {
+      battleLeaderboard['sonar-pro'].totalSpeed += parseFloat(speeds.perplexity);
+      battleLeaderboard['sonar-pro'].battles += 1;
+    }
+  }
+
+  res.json({ 
+    success: true, 
+    leaderboard: battleLeaderboard 
+  });
+});
+
+/**
+ * GET /api/model-battle/leaderboard
+ * Aktuelles Leaderboard abrufen
+ */
+app.get('/api/model-battle/leaderboard', (req, res) => {
+  // Calculate averages
+  const leaderboard = Object.entries(battleLeaderboard).map(([model, stats]) => ({
+    model,
+    wins: stats.wins,
+    avgSpeed: stats.battles > 0 
+      ? (stats.totalSpeed / stats.battles).toFixed(2) 
+      : 0,
+    battles: stats.battles
+  }));
+
+  // Sort by wins
+  leaderboard.sort((a, b) => b.wins - a.wins);
+
+  res.json({ 
+    success: true, 
+    leaderboard 
+  });
+});
+
 // ==================== ERROR HANDLERS ====================
 
 // 404 Handler
@@ -826,7 +1105,10 @@ app.use((req, res) => {
       'GET /api/tips',
       'POST /api/complete',
       'POST /api/prompt-generator',
-      'POST /api/prompt-optimizer'
+      'POST /api/prompt-optimizer',
+      'POST /api/model-battle',
+      'POST /api/model-battle/vote',
+      'GET /api/model-battle/leaderboard'
     ],
     timestamp: new Date().toISOString()
   });
@@ -844,7 +1126,7 @@ app.use((err, req, res, next) => {
 
 // ==================== START SERVER ====================
 const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log('\n🚀 hohl.rocks Backend');
+  console.log('\n🚀 hohl.rocks Backend v3.0.0');
   console.log(`📡 Listening on 0.0.0.0:${PORT}`);
   console.log(`🌐 Environment: ${NODE_ENV}`);
   console.log(`✅ CORS enabled for: ${ALLOWED_ORIGINS.join(', ')}`);
@@ -852,6 +1134,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`  - OpenAI: ${hasOpenAI ? '✅ Ready' : '❌ Not configured'}`);
   console.log(`  - Anthropic: ${hasAnthropic ? '✅ Ready' : '❌ Not configured'}`);
   console.log(`  - OpenRouter: ${hasOpenRouter ? '✅ Ready' : '❌ Not configured'}`);
+  console.log(`  - Perplexity: ${hasPerplexity ? '✅ Ready' : '❌ Not configured'}`);
   console.log('\n📋 Available Endpoints:');
   console.log('  GET  /');
   console.log('  GET  /health');
@@ -860,9 +1143,12 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log('  GET  /api/news?limit=10&source=OpenAI');
   console.log('  GET  /api/tips');
   console.log('  POST /api/complete (🤖 LLM Completion)');
-  console.log('  POST /api/prompt-generator (✨ NEW: 5 Prompt Styles)');
-  console.log('  POST /api/prompt-optimizer (⚡ NEW: Improve Prompts)');
-  console.log('\n✨ Backend ready!\n');
+  console.log('  POST /api/prompt-generator (✨ Feature #1)');
+  console.log('  POST /api/prompt-optimizer (⚡ Feature #3)');
+  console.log('  POST /api/model-battle (🥊 Feature #2: SSE Stream)');
+  console.log('  POST /api/model-battle/vote (👍 Vote System)');
+  console.log('  GET  /api/model-battle/leaderboard (🏆 Leaderboard)');
+  console.log('\n✨ Backend ready! 3/5 Features active!\n');
 });
 
 // Graceful Shutdown
