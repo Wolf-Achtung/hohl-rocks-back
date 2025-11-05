@@ -179,7 +179,8 @@ app.get('/', (req, res) => {
       'GET /api/news',
       'GET /api/tips',
       'POST /api/complete',
-      'POST /api/prompt-generator'
+      'POST /api/prompt-generator',
+      'POST /api/prompt-optimizer'
     ]
   });
 });
@@ -636,6 +637,178 @@ Antworte NUR mit einem JSON Array, ohne zusätzlichen Text:
   }
 });
 
+// ==================== PROMPT OPTIMIZER API ====================
+
+/**
+ * Prompt Optimizer - Analyzes and improves user prompts
+ * Takes a "bad" prompt and returns an improved version with score and explanations
+ */
+app.post('/api/prompt-optimizer', async (req, res) => {
+  console.log('[API] /api/prompt-optimizer called');
+  
+  const { prompt } = req.body;
+  
+  // Validation
+  if (!prompt || typeof prompt !== 'string') {
+    return res.status(400).json({
+      error: 'missing_prompt',
+      message: 'Prompt is required and must be a string'
+    });
+  }
+  
+  const cleanPrompt = prompt.trim();
+  
+  if (cleanPrompt.length < 5) {
+    return res.status(400).json({
+      error: 'prompt_too_short',
+      message: 'Prompt must be at least 5 characters'
+    });
+  }
+  
+  if (cleanPrompt.length > 1000) {
+    return res.status(400).json({
+      error: 'prompt_too_long',
+      message: 'Prompt must be max 1000 characters'
+    });
+  }
+  
+  // Check if LLM is available
+  if (!hasAnthropic && !hasOpenAI) {
+    return res.status(503).json({
+      error: 'no_llm_available',
+      message: 'Keine LLM-APIs konfiguriert für Prompt-Optimierung'
+    });
+  }
+  
+  try {
+    const systemPrompt = `Du bist ein Expert Prompt Engineer mit jahrelanger Erfahrung.
+Deine Aufgabe ist es, Prompts zu analysieren und zu verbessern.
+
+Bewerte den gegebenen Prompt nach folgenden Kriterien:
+1. Klarheit (Ist das Ziel klar?)
+2. Spezifität (Ist der Prompt konkret genug?)
+3. Kontext (Ist ausreichend Kontext gegeben?)
+4. Struktur (Ist der Prompt gut strukturiert?)
+5. Umsetzbarkeit (Ist der Prompt actionable?)
+
+Gib eine ehrliche Bewertung von 1-10 und identifiziere konkrete Probleme.
+Dann erstelle einen DEUTLICH verbesserten Prompt (Score 8-10).
+
+Antworte NUR mit folgendem JSON Format (ohne Markdown):
+{
+  "original_score": 4,
+  "improved_score": 9,
+  "problems": [
+    "Zu vage formuliert",
+    "Kein Kontext gegeben",
+    "Keine Qualitätskriterien"
+  ],
+  "improvements": [
+    "Klare Rolle definiert",
+    "Spezifisches Ziel formuliert",
+    "Output-Format festgelegt",
+    "Qualitätskriterien hinzugefügt"
+  ],
+  "improved_prompt": "Der komplett neu formulierte, deutlich bessere Prompt hier...",
+  "explanation": "Kurze Erklärung (2-3 Sätze) warum der neue Prompt besser ist"
+}
+
+WICHTIG: 
+- Der verbesserte Prompt sollte 3-5x länger sein als das Original
+- Füge Struktur, Kontext, Beispiele und Qualitätskriterien hinzu
+- Sei ehrlich beim Score - schlechte Prompts bekommen 2-4/10
+- Verbesserte Prompts sollten 8-10/10 erreichen`;
+
+    const userPrompt = `Analysiere und verbessere diesen Prompt:\n\n"${cleanPrompt}"`;
+    
+    const result = await completeText(userPrompt, {
+      system: systemPrompt,
+      provider: hasAnthropic ? 'anthropic' : 'openai',
+      maxTokens: 2000
+    });
+    
+    if (!result) {
+      throw new Error('LLM returned empty result');
+    }
+    
+    // Parse JSON from result
+    let cleanedResult = result.trim();
+    
+    // Remove markdown code blocks if present
+    if (cleanedResult.includes('```json')) {
+      cleanedResult = cleanedResult.split('```json')[1].split('```')[0].trim();
+    } else if (cleanedResult.includes('```')) {
+      cleanedResult = cleanedResult.split('```')[1].split('```')[0].trim();
+    }
+    
+    let analysis;
+    try {
+      analysis = JSON.parse(cleanedResult);
+    } catch (parseError) {
+      console.error('[OPTIMIZER] JSON Parse Error:', parseError);
+      throw new Error('JSON parsing failed');
+    }
+    
+    // Validate scores
+    if (analysis.original_score < 1 || analysis.original_score > 10) {
+      analysis.original_score = Math.max(1, Math.min(10, analysis.original_score));
+    }
+    if (analysis.improved_score < 1 || analysis.improved_score > 10) {
+      analysis.improved_score = Math.max(1, Math.min(10, analysis.improved_score));
+    }
+    
+    res.json({
+      original_prompt: cleanPrompt,
+      original_score: analysis.original_score,
+      improved_score: analysis.improved_score,
+      problems: analysis.problems || [],
+      improvements: analysis.improvements || [],
+      improved_prompt: analysis.improved_prompt || cleanPrompt,
+      explanation: analysis.explanation || 'Keine Erklärung verfügbar',
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('[OPTIMIZER] Error:', error);
+    
+    // Fallback: Basic improvement
+    const fallbackAnalysis = {
+      original_prompt: cleanPrompt,
+      original_score: 4,
+      improved_score: 8,
+      problems: [
+        'Prompt zu unspezifisch',
+        'Kein Kontext gegeben',
+        'Keine Struktur vorhanden'
+      ],
+      improvements: [
+        'Klare Rolle definiert',
+        'Spezifisches Ziel formuliert',
+        'Strukturiertes Output-Format',
+        'Qualitätskriterien hinzugefügt'
+      ],
+      improved_prompt: `Als erfahrener AI-Assistent mit Expertise in [Themenbereich]:
+
+Aufgabe: ${cleanPrompt}
+
+Bitte berücksichtige:
+1. Stelle ausreichend Kontext bereit
+2. Erkläre Zusammenhänge verständlich
+3. Gib konkrete, umsetzbare Empfehlungen
+4. Nenne Quellen oder Beispiele wo möglich
+
+Format: Strukturierte Antwort mit klaren Abschnitten
+
+Qualität: Präzise, faktentreu und hilfreich`,
+      explanation: 'Der verbesserte Prompt fügt Rolle, Struktur und Qualitätskriterien hinzu, was zu deutlich besseren Ergebnissen führt.',
+      timestamp: new Date().toISOString(),
+      fallback: true
+    };
+    
+    res.json(fallbackAnalysis);
+  }
+});
+
 // ==================== ERROR HANDLERS ====================
 
 // 404 Handler
@@ -652,7 +825,8 @@ app.use((req, res) => {
       'GET /api/news',
       'GET /api/tips',
       'POST /api/complete',
-      'POST /api/prompt-generator'
+      'POST /api/prompt-generator',
+      'POST /api/prompt-optimizer'
     ],
     timestamp: new Date().toISOString()
   });
@@ -687,6 +861,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log('  GET  /api/tips');
   console.log('  POST /api/complete (🤖 LLM Completion)');
   console.log('  POST /api/prompt-generator (✨ NEW: 5 Prompt Styles)');
+  console.log('  POST /api/prompt-optimizer (⚡ NEW: Improve Prompts)');
   console.log('\n✨ Backend ready!\n');
 });
 
