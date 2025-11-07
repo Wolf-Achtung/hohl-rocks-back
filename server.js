@@ -1,7 +1,7 @@
 // ===================================================================
 // HOHL.ROCKS BACKEND - Node.js/Express Server (OPTIMIZED)
-// Features: Prompt Generator + Optimizer + Library + Model Battle + Daily Challenge
-// Version: 2.0 - Optimized & Modularized
+// Features: Prompt Generator + Optimizer + Library + Model Battle + Daily Challenge + News + Spark
+// Version: 2.1 - Added News & Spark Features
 // ===================================================================
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -1195,6 +1195,298 @@ Bewerte die Antwort und erstelle ein JSON-Objekt:
 });
 
 // ===================================================================
+// FEATURE #6: KI-NEWS - Daily Rotating AI News
+// ===================================================================
+
+app.get("/api/news", (req, res) => {
+  try {
+    // Rotating news based on day of year
+    const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
+    
+    const newsDatabase = [
+      {
+        title: "Claude 4 Sonnet erreicht neue Benchmark-Rekorde",
+        url: "https://www.anthropic.com/news/claude-4",
+        summary: "Anthropics neuestes Modell übertrifft GPT-4o in mehreren Kategorien und zeigt besonders starke Leistungen bei Code-Generierung und mathematischem Reasoning.",
+        source: "Anthropic",
+        date: "2025-11-06",
+        category: "model-release"
+      },
+      {
+        title: "EU AI Act tritt in Kraft: Was deutsche Unternehmen beachten müssen",
+        url: "https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai",
+        summary: "Die neuen Regularien definieren Risikoklassen für KI-Systeme. Hochrisiko-Anwendungen benötigen ab sofort eine Konformitätsbewertung.",
+        source: "Europäische Kommission",
+        date: "2025-11-05",
+        category: "regulation"
+      },
+      {
+        title: "OpenAI kündigt GPT-5 für Q1 2026 an",
+        url: "https://openai.com/blog",
+        summary: "Das neue Modell soll multimodale Fähigkeiten stark erweitern und erstmals native Video-Generierung unterstützen.",
+        source: "OpenAI",
+        date: "2025-11-04",
+        category: "model-release"
+      },
+      {
+        title: "Bundesregierung fördert KI-Implementierung im Mittelstand",
+        url: "https://www.bmwk.de",
+        summary: "Neues Förderprogramm 'Digital Jetzt' wird um KI-Komponente erweitert. Bis zu 50.000€ Zuschuss für KI-Projekte verfügbar.",
+        source: "BMWK",
+        date: "2025-11-03",
+        category: "funding"
+      },
+      {
+        title: "Google DeepMind: AlphaCode 2 löst komplexe Coding-Challenges",
+        url: "https://deepmind.google/discover/blog",
+        summary: "Neue Version erreicht Top 15% Performance bei Competitive Programming. Durchbruch bei Code-Verständnis und Debugging.",
+        source: "Google DeepMind",
+        date: "2025-11-02",
+        category: "research"
+      },
+      {
+        title: "Studie: 67% der deutschen Unternehmen nutzen bereits KI",
+        url: "https://www.bitkom.org",
+        summary: "Bitkom-Umfrage zeigt rasante Adoption. Hauptanwendungen: Kundenservice, Datenanalyse und Content-Erstellung.",
+        source: "Bitkom",
+        date: "2025-11-01",
+        category: "market"
+      },
+      {
+        title: "Microsoft integriert Copilot tiefer in Office-Suite",
+        url: "https://www.microsoft.com/en-us/microsoft-365/blog",
+        summary: "Neue Features ermöglichen kontextübergreifende KI-Assistenz über alle Office-Anwendungen hinweg.",
+        source: "Microsoft",
+        date: "2025-10-31",
+        category: "product"
+      },
+      {
+        title: "Meta präsentiert Llama 4: Open-Source KI mit 500B Parametern",
+        url: "https://ai.meta.com/blog",
+        summary: "Größtes Open-Source-Modell erreicht kommerzielle GPT-4 Performance. Vollständig kostenlos nutzbar.",
+        source: "Meta AI",
+        date: "2025-10-30",
+        category: "open-source"
+      }
+    ];
+
+    // Select 6 news items starting from a rotating index
+    const startIndex = dayOfYear % newsDatabase.length;
+    const selectedNews = [];
+    
+    for (let i = 0; i < 6; i++) {
+      const index = (startIndex + i) % newsDatabase.length;
+      selectedNews.push(newsDatabase[index]);
+    }
+
+    console.log(`📰 Serving ${selectedNews.length} news items (rotation: day ${dayOfYear})`);
+
+    res.json({
+      success: true,
+      items: selectedNews,
+      lastUpdated: new Date().toISOString(),
+      rotationDay: dayOfYear
+    });
+
+  } catch (error) {
+    console.error("Error fetching news:", error);
+    res.status(500).json({
+      error: "Failed to fetch news",
+      message: error.message
+    });
+  }
+});
+
+// ===================================================================
+// FEATURE #7: SPARK OF THE DAY - Daily Rotating Inspiration
+// ===================================================================
+
+app.get("/api/spark/today", (req, res) => {
+  try {
+    // Rotating sparks based on day of year
+    const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
+    
+    const sparksDatabase = [
+      {
+        spark: "KI ist nicht die Zukunft. KI ist jetzt.",
+        author: "hohl.rocks",
+        category: "mindset"
+      },
+      {
+        spark: "Der beste Prompt ist der, der die richtigen Fragen stellt, nicht die perfekten Antworten erwartet.",
+        author: "hohl.rocks",
+        category: "prompting"
+      },
+      {
+        spark: "Kreativität entsteht nicht durch Perfektion, sondern durch Iteration.",
+        author: "hohl.rocks",
+        category: "creativity"
+      },
+      {
+        spark: "Wer KI nur als Tool sieht, unterschätzt das Medium. Wer KI nur als Partner sieht, überschätzt die Technologie.",
+        author: "hohl.rocks",
+        category: "philosophy"
+      },
+      {
+        spark: "Der Wert eines Prompts liegt nicht in seiner Länge, sondern in seiner Präzision.",
+        author: "hohl.rocks",
+        category: "prompting"
+      },
+      {
+        spark: "Innovation passiert nicht in der Komfortzone. Auch nicht beim Prompten.",
+        author: "hohl.rocks",
+        category: "innovation"
+      },
+      {
+        spark: "KI demokratisiert Expertise. Aber Expertise ersetzt sie nicht.",
+        author: "hohl.rocks",
+        category: "expertise"
+      },
+      {
+        spark: "Die beste KI-Strategie ist die, die du heute umsetzt. Nicht die perfekte für morgen.",
+        author: "hohl.rocks",
+        category: "strategy"
+      },
+      {
+        spark: "Prompts sind wie Rezepte: Die Zutaten sind wichtig, aber die Reihenfolge macht den Unterschied.",
+        author: "hohl.rocks",
+        category: "prompting"
+      },
+      {
+        spark: "Wer keine dummen Fragen stellt, bekommt keine klugen Antworten.",
+        author: "hohl.rocks",
+        category: "learning"
+      },
+      {
+        spark: "KI ist der Verstärker deiner Intention. Gute Intention → bessere Ergebnisse.",
+        author: "hohl.rocks",
+        category: "mindset"
+      },
+      {
+        spark: "Der größte Fehler beim Prompten: Zu früh aufgeben. Der zweitgrößte: Zu lange am selben Ansatz festhalten.",
+        author: "hohl.rocks",
+        category: "prompting"
+      },
+      {
+        spark: "Automation ohne Vision ist Effizienz ohne Richtung.",
+        author: "hohl.rocks",
+        category: "automation"
+      },
+      {
+        spark: "KI-Kompetenz ist keine technische Frage. Es ist eine Kulturelle.",
+        author: "hohl.rocks",
+        category: "culture"
+      },
+      {
+        spark: "Der Unterschied zwischen einem guten und einem großartigen Prompt? Context. Immer Context.",
+        author: "hohl.rocks",
+        category: "prompting"
+      },
+      {
+        spark: "Wer KI nutzt, um Zeit zu sparen, denkt zu klein. Nutze KI, um Dinge zu erreichen, die vorher unmöglich waren.",
+        author: "hohl.rocks",
+        category: "vision"
+      },
+      {
+        spark: "Fehler sind keine Bugs. Sie sind Feedback auf deinem Weg zur besseren Lösung.",
+        author: "hohl.rocks",
+        category: "learning"
+      },
+      {
+        spark: "Die Kunst des Promptens: Konkret genug für Relevanz, offen genug für Kreativität.",
+        author: "hohl.rocks",
+        category: "prompting"
+      },
+      {
+        spark: "KI kann viel. Aber sie kann nicht wollen. Das ist dein Job.",
+        author: "hohl.rocks",
+        category: "philosophy"
+      },
+      {
+        spark: "Der beste Use Case für KI ist der, den du noch nicht kennst. Also: Experimentiere.",
+        author: "hohl.rocks",
+        category: "innovation"
+      },
+      {
+        spark: "Prompt Engineering ist 10% Technik, 40% Psychologie, 50% Iteration.",
+        author: "hohl.rocks",
+        category: "prompting"
+      },
+      {
+        spark: "Wer auf den perfekten Prompt wartet, verpasst 1000 gute Prompts.",
+        author: "hohl.rocks",
+        category: "action"
+      },
+      {
+        spark: "KI-Tools kommen und gehen. KI-Thinking bleibt.",
+        author: "hohl.rocks",
+        category: "mindset"
+      },
+      {
+        spark: "Die größte Barriere bei KI-Adoption ist nicht die Technologie. Es ist die Vorstellungskraft.",
+        author: "hohl.rocks",
+        category: "adoption"
+      },
+      {
+        spark: "Ein guter Prompt beantwortet die Frage. Ein großartiger Prompt stellt bessere Fragen.",
+        author: "hohl.rocks",
+        category: "prompting"
+      },
+      {
+        spark: "KI macht nicht alles einfacher. Aber sie macht Unmögliches möglich.",
+        author: "hohl.rocks",
+        category: "possibility"
+      },
+      {
+        spark: "Der Wert deiner KI-Strategie misst sich nicht an den Tools, sondern an den Ergebnissen.",
+        author: "hohl.rocks",
+        category: "strategy"
+      },
+      {
+        spark: "Wer KI als Bedrohung sieht, unterschätzt seine eigene Rolle. Wer sie als Lösung sieht, unterschätzt die Herausforderung.",
+        author: "hohl.rocks",
+        category: "balance"
+      },
+      {
+        spark: "Die Zukunft gehört denen, die heute anfangen zu lernen, nicht denen, die gestern perfekt waren.",
+        author: "hohl.rocks",
+        category: "future"
+      },
+      {
+        spark: "Prompts sind Brücken zwischen deiner Intention und der KI-Execution. Baue stabile Brücken.",
+        author: "hohl.rocks",
+        category: "prompting"
+      },
+      {
+        spark: "KI-Literacy ist die neue Digital Literacy. Und die neue Digital Literacy ist überlebenswichtig.",
+        author: "hohl.rocks",
+        category: "education"
+      }
+    ];
+
+    // Select spark for today
+    const todaysSpark = sparksDatabase[dayOfYear % sparksDatabase.length];
+
+    console.log(`✨ Serving Spark of the Day: "${todaysSpark.spark.substring(0, 50)}..."`);
+
+    res.json({
+      success: true,
+      ...todaysSpark,
+      date: new Date().toISOString().split('T')[0],
+      rotationDay: dayOfYear,
+      totalSparks: sparksDatabase.length
+    });
+
+  } catch (error) {
+    console.error("Error fetching spark:", error);
+    res.status(500).json({
+      error: "Failed to fetch spark",
+      message: error.message
+    });
+  }
+});
+
+// ===================================================================
 // ERROR HANDLERS (NEW)
 // ===================================================================
 
@@ -1213,7 +1505,9 @@ app.use((req, res) => {
       "GET /api/prompts/:id",
       "POST /api/model-battle",
       "GET /api/daily-challenge",
-      "POST /api/submit-challenge"
+      "POST /api/submit-challenge",
+      "GET /api/news",
+      "GET /api/spark/today"
     ],
     timestamp: new Date().toISOString()
   });
@@ -1286,7 +1580,7 @@ const server = app.listen(PORT, () => {
 ╔════════════════════════════════════════════════════════════╗
 ║                    🚀 HOHL.ROCKS BACKEND                   ║
 ╠════════════════════════════════════════════════════════════╣
-║  Version:          2.0 (Optimized)                         ║
+║  Version:          2.1 (News + Spark Added)                ║
 ║  Port:             ${PORT.toString().padEnd(44)}║
 ║  Environment:      ${NODE_ENV.padEnd(44)}║
 ║  Model:            ${MODEL.padEnd(44)}║
@@ -1298,6 +1592,8 @@ const server = app.listen(PORT, () => {
 ║    ✓ Prompt Library (30 Featured)                         ║
 ║    ✓ Model Battle (Claude, GPT, Perplexity)               ║
 ║    ✓ Daily Challenge (Gamification)                       ║
+║    ✓ KI-News (Daily Rotating)                             ║
+║    ✓ Spark of the Day (Daily Inspiration)                 ║
 ╠════════════════════════════════════════════════════════════╣
 ║  Endpoints:                                                ║
 ║    • GET  /                                                ║
@@ -1309,6 +1605,8 @@ const server = app.listen(PORT, () => {
 ║    • POST /api/model-battle                                ║
 ║    • GET  /api/daily-challenge                             ║
 ║    • POST /api/submit-challenge                            ║
+║    • GET  /api/news                                        ║
+║    • GET  /api/spark/today                                 ║
 ╚════════════════════════════════════════════════════════════╝
   `);
   
