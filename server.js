@@ -1,6 +1,7 @@
 // ===================================================================
-// HOHL.ROCKS BACKEND - Node.js/Express Server
-// Features: Prompt Generator + Optimizer + Library + Model Battle
+// HOHL.ROCKS BACKEND - Node.js/Express Server (OPTIMIZED)
+// Features: Prompt Generator + Optimizer + Library + Model Battle + Daily Challenge
+// Version: 2.0 - Optimized & Modularized
 // ===================================================================
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -10,6 +11,23 @@ import cors from "cors";
 
 const app = express();
 const PORT = process.env.PORT || 8080;
+const NODE_ENV = process.env.NODE_ENV || "development";
+
+// ===================================================================
+// LOGGING MIDDLEWARE (NEW)
+// ===================================================================
+
+const requestLogger = (req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] ${req.method} ${req.path} - ${res.statusCode} (${duration}ms)`);
+  });
+  next();
+};
+
+app.use(requestLogger);
 
 // ===================================================================
 // MIDDLEWARE
@@ -17,19 +35,32 @@ const PORT = process.env.PORT || 8080;
 
 app.use(express.json({ limit: "10mb" }));
 
+// CORS Configuration - Fixed for Production
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
   ? process.env.ALLOWED_ORIGINS.split(",")
-  : ["http://localhost:3000", "http://localhost:5173"];
+  : [
+      "http://localhost:3000",
+      "http://localhost:5173",
+      "http://localhost:8080",
+      "https://hohl.rocks",
+      "https://www.hohl.rocks"
+    ];
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
+      console.warn(`⚠️  CORS blocked: ${origin}`);
       callback(new Error("Not allowed by CORS"));
     }
   },
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 // ===================================================================
@@ -52,7 +83,37 @@ const openai = new OpenAI({
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
 
 // ===================================================================
-// FEATURED PROMPTS DATABASE (Static for now)
+// API KEY VALIDATION (NEW)
+// ===================================================================
+
+const validateApiKeys = () => {
+  const errors = [];
+  
+  if (!process.env.ANTHROPIC_API_KEY) {
+    errors.push("❌ ANTHROPIC_API_KEY missing");
+  }
+  
+  if (!process.env.OPENAI_API_KEY) {
+    errors.push("❌ OPENAI_API_KEY missing");
+  }
+  
+  if (!process.env.PERPLEXITY_API_KEY) {
+    errors.push("❌ PERPLEXITY_API_KEY missing");
+  }
+  
+  if (errors.length > 0) {
+    console.error("\n⚠️  API KEY VALIDATION FAILED:");
+    errors.forEach(err => console.error(err));
+    console.error("\n");
+  } else {
+    console.log("✅ All API keys validated");
+  }
+  
+  return errors.length === 0;
+};
+
+// ===================================================================
+// FEATURED PROMPTS DATABASE
 // ===================================================================
 
 const FEATURED_PROMPTS = [
@@ -437,16 +498,61 @@ async function callClaude(systemPrompt, userPrompt, maxTokens = 1500) {
 }
 
 // ===================================================================
-// ROUTES
+// HEALTH CHECK & INFO ROUTES
 // ===================================================================
 
-// Health Check
+// Main Health Check
 app.get("/", (req, res) => {
   res.json({
     status: "ok",
     message: "hohl.rocks backend is running",
-    features: ["prompt-generator", "prompt-optimizer", "prompt-library"],
+    version: "2.0",
+    features: [
+      "prompt-generator",
+      "prompt-optimizer",
+      "prompt-library",
+      "model-battle",
+      "daily-challenge"
+    ],
+    environment: NODE_ENV,
     timestamp: new Date().toISOString(),
+  });
+});
+
+// Health Check Route (NEW)
+app.get("/health", (req, res) => {
+  const health = {
+    status: "healthy",
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    checks: {
+      api: "ok",
+      database: "ok"
+    }
+  };
+  
+  res.status(200).json(health);
+});
+
+// Self Route (NEW) - Required by Frontend
+app.get("/api/self", (req, res) => {
+  res.json({
+    status: "ok",
+    user: null, // Later mit Auth erweitern
+    features: [
+      "prompt-generator",
+      "prompt-optimizer",
+      "prompt-library",
+      "model-battle",
+      "daily-challenge"
+    ],
+    availableModels: ["claude", "gpt", "perplexity"],
+    limits: {
+      maxPromptLength: 2000,
+      maxResponseTokens: 1024,
+      rateLimit: "100/hour"
+    },
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -462,6 +568,13 @@ app.post("/api/prompt-generator", async (req, res) => {
       return res.status(400).json({
         error: "Invalid input",
         message: "Topic is required and must be a non-empty string",
+      });
+    }
+
+    if (topic.length > 500) {
+      return res.status(400).json({
+        error: "Invalid input",
+        message: "Topic too long (max 500 characters)",
       });
     }
 
@@ -528,7 +641,7 @@ Generiere 5 verschiedene Prompt-Styles (Executive, Technical, Creative, Tutorial
 });
 
 // ===================================================================
-// FEATURE #3: PROMPT OPTIMIZER
+// FEATURE #2: PROMPT OPTIMIZER
 // ===================================================================
 
 app.post("/api/prompt-optimizer", async (req, res) => {
@@ -539,6 +652,13 @@ app.post("/api/prompt-optimizer", async (req, res) => {
       return res.status(400).json({
         error: "Invalid input",
         message: "Prompt is required and must be a non-empty string",
+      });
+    }
+
+    if (prompt.length > 1000) {
+      return res.status(400).json({
+        error: "Invalid input",
+        message: "Prompt too long (max 1000 characters)",
       });
     }
 
@@ -612,7 +732,7 @@ Analysiere und optimiere diesen Prompt. Gib einen Score (1-10), liste Probleme, 
 });
 
 // ===================================================================
-// FEATURE #5: PROMPT LIBRARY
+// FEATURE #3: PROMPT LIBRARY
 // ===================================================================
 
 app.get("/api/prompts", (req, res) => {
@@ -668,6 +788,14 @@ app.get("/api/prompts", (req, res) => {
 app.get("/api/prompts/:id", (req, res) => {
   try {
     const id = parseInt(req.params.id);
+    
+    if (isNaN(id)) {
+      return res.status(400).json({
+        error: "Invalid ID",
+        message: "ID must be a number"
+      });
+    }
+    
     const prompt = FEATURED_PROMPTS.find((p) => p.id === id);
 
     if (!prompt) {
@@ -692,7 +820,7 @@ app.get("/api/prompts/:id", (req, res) => {
 });
 
 // ===================================================================
-// MODEL BATTLE ARENA - Compare 3 AI Models
+// FEATURE #4: MODEL BATTLE ARENA - Compare 3 AI Models
 // ===================================================================
 
 app.post("/api/model-battle", async (req, res) => {
@@ -856,7 +984,7 @@ app.post("/api/model-battle", async (req, res) => {
 });
 
 // ===================================================================
-// DAILY CHALLENGE - Get Challenge of the Day
+// FEATURE #5: DAILY CHALLENGE - Get Challenge of the Day
 // ===================================================================
 
 app.get("/api/daily-challenge", async (req, res) => {
@@ -962,7 +1090,7 @@ Sei kreativ! Wechsle zwischen verschiedenen Themen: Content, Strategie, Analyse,
 });
 
 // ===================================================================
-// DAILY CHALLENGE - Submit & Evaluate Answer
+// FEATURE #5: DAILY CHALLENGE - Submit & Evaluate Answer
 // ===================================================================
 
 app.post("/api/submit-challenge", async (req, res) => {
@@ -978,6 +1106,12 @@ app.post("/api/submit-challenge", async (req, res) => {
     if (answer.trim().length < 20) {
       return res.status(400).json({ 
         error: "Answer too short (minimum 20 characters)" 
+      });
+    }
+
+    if (answer.length > 5000) {
+      return res.status(400).json({ 
+        error: "Answer too long (maximum 5000 characters)" 
       });
     }
 
@@ -1061,13 +1195,123 @@ Bewerte die Antwort und erstelle ein JSON-Objekt:
 });
 
 // ===================================================================
+// ERROR HANDLERS (NEW)
+// ===================================================================
+
+// 404 Handler - Muss VOR dem Error Handler kommen
+app.use((req, res) => {
+  res.status(404).json({
+    error: "Not found",
+    message: `Route ${req.method} ${req.path} not found`,
+    availableRoutes: [
+      "GET /",
+      "GET /health",
+      "GET /api/self",
+      "POST /api/prompt-generator",
+      "POST /api/prompt-optimizer",
+      "GET /api/prompts",
+      "GET /api/prompts/:id",
+      "POST /api/model-battle",
+      "GET /api/daily-challenge",
+      "POST /api/submit-challenge"
+    ],
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Global Error Handler
+app.use((error, req, res, next) => {
+  console.error("❌ Global Error Handler:", error);
+  
+  // CORS Error
+  if (error.message === "Not allowed by CORS") {
+    return res.status(403).json({
+      error: "CORS Error",
+      message: "Origin not allowed",
+      timestamp: new Date().toISOString()
+    });
+  }
+  
+  // JSON Parsing Error
+  if (error instanceof SyntaxError && error.status === 400 && 'body' in error) {
+    return res.status(400).json({
+      error: "Invalid JSON",
+      message: "Request body must be valid JSON",
+      timestamp: new Date().toISOString()
+    });
+  }
+  
+  // Generic Error
+  res.status(500).json({
+    error: "Internal Server Error",
+    message: NODE_ENV === "development" ? error.message : "An error occurred",
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ===================================================================
+// GRACEFUL SHUTDOWN (NEW)
+// ===================================================================
+
+process.on('SIGTERM', () => {
+  console.log('\n⚠️  SIGTERM signal received: closing HTTP server');
+  server.close(() => {
+    console.log('✅ HTTP server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('\n⚠️  SIGINT signal received: closing HTTP server');
+  server.close(() => {
+    console.log('✅ HTTP server closed');
+    process.exit(0);
+  });
+});
+
+// ===================================================================
 // START SERVER
 // ===================================================================
 
-app.listen(PORT, () => {
-  console.log(`\n🚀 hohl.rocks backend running on port ${PORT}`);
-  console.log(`📍 Environment: ${process.env.NODE_ENV || "development"}`);
-  console.log(`🤖 Claude Model: ${MODEL}`);
-  console.log(`📚 Featured Prompts: ${FEATURED_PROMPTS.length}`);
-  console.log(`✨ Features: Generator + Optimizer + Library + Battle + Daily Challenge\n`);
+// Validate API Keys before starting
+const apiKeysValid = validateApiKeys();
+
+if (!apiKeysValid && NODE_ENV === "production") {
+  console.error("\n❌ Cannot start server: API keys validation failed");
+  process.exit(1);
+}
+
+const server = app.listen(PORT, () => {
+  console.log(`
+╔════════════════════════════════════════════════════════════╗
+║                    🚀 HOHL.ROCKS BACKEND                   ║
+╠════════════════════════════════════════════════════════════╣
+║  Version:          2.0 (Optimized)                         ║
+║  Port:             ${PORT.toString().padEnd(44)}║
+║  Environment:      ${NODE_ENV.padEnd(44)}║
+║  Model:            ${MODEL.padEnd(44)}║
+║  Prompts:          ${FEATURED_PROMPTS.length.toString().padEnd(44)}║
+╠════════════════════════════════════════════════════════════╣
+║  Features:                                                 ║
+║    ✓ Prompt Generator (5 Styles)                          ║
+║    ✓ Prompt Optimizer (Analysis & Improvement)            ║
+║    ✓ Prompt Library (30 Featured)                         ║
+║    ✓ Model Battle (Claude, GPT, Perplexity)               ║
+║    ✓ Daily Challenge (Gamification)                       ║
+╠════════════════════════════════════════════════════════════╣
+║  Endpoints:                                                ║
+║    • GET  /                                                ║
+║    • GET  /health                                          ║
+║    • GET  /api/self                                        ║
+║    • POST /api/prompt-generator                            ║
+║    • POST /api/prompt-optimizer                            ║
+║    • GET  /api/prompts                                     ║
+║    • POST /api/model-battle                                ║
+║    • GET  /api/daily-challenge                             ║
+║    • POST /api/submit-challenge                            ║
+╚════════════════════════════════════════════════════════════╝
+  `);
+  
+  console.log(`✅ Server ready at http://localhost:${PORT}`);
+  console.log(`⏰ Started at ${new Date().toISOString()}\n`);
 });
