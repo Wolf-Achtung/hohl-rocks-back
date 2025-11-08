@@ -1,0 +1,35 @@
+{
+  "name": "hohl-rocks-backend",
+  "version": "2.1.0",
+  "description": "HOHL.ROCKS Backend - AI Prompt Platform API",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "ai",
+    "prompts",
+    "claude",
+    "gpt",
+    "perplexity"
+  ],
+  "author": "Wolf Hohl",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "openai": "^4.73.0",
+    "express": "^4.21.1",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wolfhohl/hohl-rocks-backend"
+  }
+}

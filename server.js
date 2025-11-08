@@ -1,5 +1,5 @@
 // ===================================================================
-// HOHL.ROCKS BACKEND - Node.js/Express Server (OPTIMIZED) jeah 
+// HOHL.ROCKS BACKEND - Node.js/Express Server (OPTIMIZED)
 // Features: Prompt Generator + Optimizer + Library + Model Battle + Daily Challenge + News + Spark
 // Version: 2.1 - Added News & Spark Features
 // ===================================================================
