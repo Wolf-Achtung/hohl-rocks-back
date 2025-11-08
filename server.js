@@ -35,15 +35,21 @@ app.use(requestLogger);
 
 app.use(express.json({ limit: "10mb" }));
 
-// CORS Configuration - Fixed for Production
+// CORS Configuration - Fixed for Production + Railway
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
   ? process.env.ALLOWED_ORIGINS.split(",")
   : [
+      // Development
       "http://localhost:3000",
       "http://localhost:5173",
       "http://localhost:8080",
+      // Production
       "https://hohl.rocks",
-      "https://www.hohl.rocks"
+      "https://www.hohl.rocks",
+      // Railway Frontend (wenn Frontend auch auf Railway läuft)
+      "https://hohl-rocks-front-production.up.railway.app",
+      // Railway Backend (für Self-Requests)
+      "https://hohl-rocks-back-production.up.railway.app"
     ];
 
 app.use(cors({
@@ -528,6 +534,27 @@ app.get("/health", (req, res) => {
     checks: {
       api: "ok",
       database: "ok"
+    },
+    // Environment Info für Debugging
+    environment: {
+      nodeEnv: NODE_ENV,
+      port: PORT,
+      corsOrigins: allowedOrigins.length,
+      apiKeysConfigured: {
+        anthropic: !!process.env.ANTHROPIC_API_KEY,
+        openai: !!process.env.OPENAI_API_KEY,
+        perplexity: !!process.env.PERPLEXITY_API_KEY
+      }
+    },
+    // Features Status
+    features: {
+      "prompt-generator": true,
+      "prompt-optimizer": true,
+      "prompt-library": true,
+      "model-battle": true,
+      "daily-challenge": true,
+      "ki-news": true,
+      "spark": true
     }
   };
   
