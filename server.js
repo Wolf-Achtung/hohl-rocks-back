@@ -89,6 +89,56 @@ const openai = new OpenAI({
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
 
 // ===================================================================
+// RATE LIMITING (In-Memory) - Priorität für Model Battle
+// ===================================================================
+
+const rateLimitStore = new Map();
+
+// Cleanup old entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, data] of rateLimitStore.entries()) {
+    if (now - data.windowStart > 60000) {
+      rateLimitStore.delete(key);
+    }
+  }
+}, 300000);
+
+const createRateLimiter = (maxRequests, windowMs = 60000) => {
+  return (req, res, next) => {
+    const ip = req.ip || req.connection.remoteAddress || 'unknown';
+    const key = `${ip}:${req.path}`;
+    const now = Date.now();
+
+    let record = rateLimitStore.get(key);
+
+    if (!record || (now - record.windowStart) > windowMs) {
+      record = { count: 1, windowStart: now };
+      rateLimitStore.set(key, record);
+      return next();
+    }
+
+    if (record.count >= maxRequests) {
+      const retryAfter = Math.ceil((record.windowStart + windowMs - now) / 1000);
+      console.warn(`⚠️  Rate limit exceeded: ${ip} on ${req.path}`);
+      return res.status(429).json({
+        error: "Too Many Requests",
+        message: `Rate limit exceeded. Max ${maxRequests} requests per minute.`,
+        retryAfter: retryAfter,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    record.count++;
+    next();
+  };
+};
+
+// Rate limiters for different endpoints
+const modelBattleRateLimit = createRateLimiter(10, 60000);  // 10 req/min (HAUPTFEATURE)
+const generalRateLimit = createRateLimiter(30, 60000);       // 30 req/min (andere Endpoints)
+
+// ===================================================================
 // API KEY VALIDATION (NEW)
 // ===================================================================
 
@@ -507,33 +557,41 @@ async function callClaude(systemPrompt, userPrompt, maxTokens = 1500) {
 // HEALTH CHECK & INFO ROUTES
 // ===================================================================
 
+const API_VERSION = "2.2";  // Unified version constant
+
 // Main Health Check
 app.get("/", (req, res) => {
   res.json({
     status: "ok",
     message: "hohl.rocks backend is running",
-    version: "2.0",
-    features: [
-      "prompt-generator",
-      "prompt-optimizer",
-      "prompt-library",
-      "model-battle",
-      "daily-challenge"
-    ],
+    version: API_VERSION,
+    // Features mit Priorität (nach Frontend-Redesign 2026-01)
+    features: {
+      critical: ["model-battle"],           // HAUPTFEATURE - aktiv genutzt
+      legacy: [                              // Nicht mehr verlinkt, aber funktionsfähig
+        "prompt-generator",
+        "prompt-optimizer",
+        "prompt-library",
+        "daily-challenge",
+        "ki-news",
+        "spark"
+      ]
+    },
     environment: NODE_ENV,
     timestamp: new Date().toISOString(),
   });
 });
 
-// Health Check Route (NEW)
+// Health Check Route (Detailed)
 app.get("/health", (req, res) => {
   const health = {
     status: "healthy",
+    version: API_VERSION,
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
     checks: {
       api: "ok",
-      database: "ok"
+      rateLimiting: "active"
     },
     // Environment Info für Debugging
     environment: {
@@ -546,38 +604,44 @@ app.get("/health", (req, res) => {
         perplexity: !!process.env.PERPLEXITY_API_KEY
       }
     },
-    // Features Status
+    // Features Status mit Priorität
     features: {
-      "prompt-generator": true,
-      "prompt-optimizer": true,
-      "prompt-library": true,
-      "model-battle": true,
-      "daily-challenge": true,
-      "ki-news": true,
-      "spark": true
+      critical: {
+        "model-battle": { active: true, rateLimit: "10/min" }
+      },
+      legacy: {
+        "prompt-generator": { active: true, rateLimit: "30/min" },
+        "prompt-optimizer": { active: true, rateLimit: "30/min" },
+        "prompt-library": { active: true, rateLimit: "none" },
+        "daily-challenge": { active: true, rateLimit: "30/min" },
+        "ki-news": { active: true, rateLimit: "none" },
+        "spark": { active: true, rateLimit: "none" }
+      }
     }
   };
-  
+
   res.status(200).json(health);
 });
 
-// Self Route (NEW) - Required by Frontend
+// Self Route - API Description
 app.get("/api/self", (req, res) => {
   res.json({
     status: "ok",
-    user: null, // Later mit Auth erweitern
-    features: [
-      "prompt-generator",
-      "prompt-optimizer",
-      "prompt-library",
-      "model-battle",
-      "daily-challenge"
-    ],
+    version: API_VERSION,
+    user: null, // Reserved für Auth
+    // Features mit Priorität
+    features: {
+      critical: ["model-battle"],
+      legacy: ["prompt-generator", "prompt-optimizer", "prompt-library", "daily-challenge", "ki-news", "spark"]
+    },
     availableModels: ["claude", "gpt", "perplexity"],
     limits: {
       maxPromptLength: 2000,
       maxResponseTokens: 1024,
-      rateLimit: "100/hour"
+      rateLimit: {
+        modelBattle: "10/min",
+        other: "30/min"
+      }
     },
     timestamp: new Date().toISOString()
   });
@@ -847,42 +911,78 @@ app.get("/api/prompts/:id", (req, res) => {
 });
 
 // ===================================================================
-// FEATURE #4: MODEL BATTLE ARENA - Compare 3 AI Models
+// FEATURE #4: MODEL BATTLE ARENA - Compare 3 AI Models (HAUPTFEATURE)
+// PRIORITÄT: KRITISCH - Rate-Limited, Timeout-Handling, Graceful Degradation
 // ===================================================================
 
-app.post("/api/model-battle", async (req, res) => {
+// Timeout wrapper für API-Calls
+const withTimeout = (promise, timeoutMs, modelName) => {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${modelName} timeout after ${timeoutMs}ms`)), timeoutMs)
+    )
+  ]);
+};
+
+// Input-Sanitization für Prompts
+const sanitizePrompt = (prompt) => {
+  // Remove potential script tags and HTML
+  return prompt
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<[^>]*>/g, '')
+    .trim();
+};
+
+const API_TIMEOUT = 30000; // 30 Sekunden Timeout pro Model
+
+app.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
   try {
     const { prompt } = req.body;
 
-    if (!prompt || prompt.trim().length === 0) {
-      return res.status(400).json({ 
-        error: "Prompt is required" 
+    if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
+      return res.status(400).json({
+        error: "Prompt is required",
+        message: "Please provide a non-empty prompt string"
       });
     }
 
     if (prompt.length > 2000) {
-      return res.status(400).json({ 
-        error: "Prompt too long (max 2000 characters)" 
+      return res.status(400).json({
+        error: "Prompt too long",
+        message: "Maximum prompt length is 2000 characters",
+        currentLength: prompt.length
       });
     }
 
-    console.log(`\n⚔️  Model Battle: "${prompt.slice(0, 50)}..."`);
+    // Sanitize input
+    const cleanPrompt = sanitizePrompt(prompt);
 
-    // Parallel API Calls mit Response Time Tracking
+    if (cleanPrompt.length < 3) {
+      return res.status(400).json({
+        error: "Invalid prompt",
+        message: "Prompt must contain meaningful content"
+      });
+    }
+
+    console.log(`\n⚔️  Model Battle: "${cleanPrompt.slice(0, 50)}..." (${cleanPrompt.length} chars)`);
+
+    // Parallel API Calls mit Timeout und Response Time Tracking
     const results = await Promise.allSettled([
       // Claude Sonnet 4
       (async () => {
         const startTime = Date.now();
         try {
-          const message = await anthropic.messages.create({
-            model: "claude-sonnet-4-20250514",
-            max_tokens: 1024,
-            messages: [{
-              role: "user",
-              content: prompt
-            }]
-          });
-          
+          const message = await withTimeout(
+            anthropic.messages.create({
+              model: "claude-sonnet-4-20250514",
+              max_tokens: 1024,
+              messages: [{ role: "user", content: cleanPrompt }]
+            }),
+            API_TIMEOUT,
+            "Claude"
+          );
+
           return {
             model: "claude",
             name: "Claude Sonnet 4",
@@ -895,8 +995,8 @@ app.post("/api/model-battle", async (req, res) => {
           return {
             model: "claude",
             name: "Claude Sonnet 4",
-            response: "Fehler bei der Anfrage",
-            error: error.message,
+            response: null,
+            error: error.message.includes('timeout') ? "Zeitüberschreitung" : "Service vorübergehend nicht verfügbar",
             responseTime: Date.now() - startTime,
             success: false
           };
@@ -907,15 +1007,16 @@ app.post("/api/model-battle", async (req, res) => {
       (async () => {
         const startTime = Date.now();
         try {
-          const completion = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            max_tokens: 1024,
-            messages: [{
-              role: "user",
-              content: prompt
-            }]
-          });
-          
+          const completion = await withTimeout(
+            openai.chat.completions.create({
+              model: "gpt-4o-mini",
+              max_tokens: 1024,
+              messages: [{ role: "user", content: cleanPrompt }]
+            }),
+            API_TIMEOUT,
+            "GPT"
+          );
+
           return {
             model: "gpt",
             name: "GPT-4o Mini",
@@ -928,8 +1029,8 @@ app.post("/api/model-battle", async (req, res) => {
           return {
             model: "gpt",
             name: "GPT-4o Mini",
-            response: "Fehler bei der Anfrage",
-            error: error.message,
+            response: null,
+            error: error.message.includes('timeout') ? "Zeitüberschreitung" : "Service vorübergehend nicht verfügbar",
             responseTime: Date.now() - startTime,
             success: false
           };
@@ -940,6 +1041,9 @@ app.post("/api/model-battle", async (req, res) => {
       (async () => {
         const startTime = Date.now();
         try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
+
           const response = await fetch("https://api.perplexity.ai/chat/completions", {
             method: "POST",
             headers: {
@@ -949,19 +1053,19 @@ app.post("/api/model-battle", async (req, res) => {
             body: JSON.stringify({
               model: "sonar-pro",
               max_tokens: 1024,
-              messages: [{
-                role: "user",
-                content: prompt
-              }]
-            })
+              messages: [{ role: "user", content: cleanPrompt }]
+            }),
+            signal: controller.signal
           });
+
+          clearTimeout(timeoutId);
 
           if (!response.ok) {
             throw new Error(`Perplexity API error: ${response.status}`);
           }
 
           const data = await response.json();
-          
+
           return {
             model: "perplexity",
             name: "Perplexity Sonar Pro",
@@ -974,8 +1078,8 @@ app.post("/api/model-battle", async (req, res) => {
           return {
             model: "perplexity",
             name: "Perplexity Sonar Pro",
-            response: "Fehler bei der Anfrage",
-            error: error.message,
+            response: null,
+            error: error.name === 'AbortError' ? "Zeitüberschreitung" : "Service vorübergehend nicht verfügbar",
             responseTime: Date.now() - startTime,
             success: false
           };
@@ -983,10 +1087,20 @@ app.post("/api/model-battle", async (req, res) => {
       })()
     ]);
 
-    // Extract results
-    const responses = results.map(result => 
-      result.status === 'fulfilled' ? result.value : result.reason
+    // Extract results with graceful handling
+    const responses = results.map(result =>
+      result.status === 'fulfilled' ? result.value : {
+        model: "unknown",
+        name: "Unknown Model",
+        response: null,
+        error: "Unerwarteter Fehler",
+        responseTime: 0,
+        success: false
+      }
     );
+
+    // Count successful responses for graceful degradation
+    const successCount = responses.filter(r => r.success).length;
 
     // Log response times
     console.log("⏱️  Response Times:");
@@ -994,18 +1108,29 @@ app.post("/api/model-battle", async (req, res) => {
       console.log(`   ${r.name}: ${r.responseTime}ms ${r.success ? '✓' : '✗'}`);
     });
 
+    // Graceful Degradation: Return results even if some models fail
+    console.log(`✅ Model Battle completed: ${successCount}/3 models successful`);
+
     res.json({
-      success: true,
-      prompt,
+      success: successCount > 0,  // Success if at least one model responded
+      partialFailure: successCount < 3 && successCount > 0,
+      prompt: cleanPrompt,
       responses,
+      meta: {
+        successfulModels: successCount,
+        totalModels: 3,
+        avgResponseTime: Math.round(responses.reduce((sum, r) => sum + r.responseTime, 0) / 3)
+      },
       timestamp: new Date().toISOString()
     });
 
   } catch (error) {
     console.error("Model Battle error:", error);
     res.status(500).json({
+      success: false,
       error: "Internal server error",
-      message: error.message
+      message: NODE_ENV === "development" ? error.message : "Ein Fehler ist aufgetreten",
+      timestamp: new Date().toISOString()
     });
   }
 });
@@ -1587,37 +1712,40 @@ const server = app.listen(PORT, () => {
 ╔════════════════════════════════════════════════════════════╗
 ║                    🚀 HOHL.ROCKS BACKEND                   ║
 ╠════════════════════════════════════════════════════════════╣
-║  Version:          2.1 (News + Spark Added)                ║
+║  Version:          ${API_VERSION.padEnd(44)}║
 ║  Port:             ${PORT.toString().padEnd(44)}║
 ║  Environment:      ${NODE_ENV.padEnd(44)}║
 ║  Model:            ${MODEL.padEnd(44)}║
 ║  Prompts:          ${FEATURED_PROMPTS.length.toString().padEnd(44)}║
 ╠════════════════════════════════════════════════════════════╣
-║  Features:                                                 ║
-║    ✓ Prompt Generator (5 Styles)                          ║
-║    ✓ Prompt Optimizer (Analysis & Improvement)            ║
-║    ✓ Prompt Library (30 Featured)                         ║
-║    ✓ Model Battle (Claude, GPT, Perplexity)               ║
-║    ✓ Daily Challenge (Gamification)                       ║
-║    ✓ KI-News (Daily Rotating)                             ║
-║    ✓ Spark of the Day (Daily Inspiration)                 ║
+║  CRITICAL FEATURES (Rate-Limited):                         ║
+║    ⚡ Model Battle (10 req/min) - HAUPTFEATURE             ║
+╠════════════════════════════════════════════════════════════╣
+║  LEGACY FEATURES (Available but not linked):               ║
+║    ○ Prompt Generator (5 Styles)                          ║
+║    ○ Prompt Optimizer (Analysis & Improvement)            ║
+║    ○ Prompt Library (30 Featured)                         ║
+║    ○ Daily Challenge (Gamification)                       ║
+║    ○ KI-News (Daily Rotating)                             ║
+║    ○ Spark of the Day (Daily Inspiration)                 ║
 ╠════════════════════════════════════════════════════════════╣
 ║  Endpoints:                                                ║
-║    • GET  /                                                ║
-║    • GET  /health                                          ║
-║    • GET  /api/self                                        ║
+║    • GET  /                   (Health)                     ║
+║    • GET  /health             (Detailed Status)            ║
+║    • GET  /api/self           (API Info)                   ║
+║    • POST /api/model-battle   ⚡ KRITISCH                  ║
 ║    • POST /api/prompt-generator                            ║
 ║    • POST /api/prompt-optimizer                            ║
 ║    • GET  /api/prompts                                     ║
-║    • POST /api/model-battle                                ║
 ║    • GET  /api/daily-challenge                             ║
 ║    • POST /api/submit-challenge                            ║
 ║    • GET  /api/news                                        ║
 ║    • GET  /api/spark/today                                 ║
 ╚════════════════════════════════════════════════════════════╝
   `);
-  
+
   console.log(`✅ Server ready at http://localhost:${PORT}`);
+  console.log(`🛡️  Rate Limiting: Active (Model Battle: 10/min, Others: 30/min)`);
   console.log(`⏰ Started at ${new Date().toISOString()}\n`);
 });
 
