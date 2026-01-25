@@ -89,6 +89,33 @@ const openai = new OpenAI({
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
 
 // ===================================================================
+// CACHING (In-Memory) - Für statische/semi-statische Endpoints
+// ===================================================================
+
+const cacheStore = new Map();
+
+const createCache = (ttlMs) => {
+  return {
+    get: (key) => {
+      const cached = cacheStore.get(key);
+      if (cached && Date.now() - cached.timestamp < ttlMs) {
+        return cached.data;
+      }
+      cacheStore.delete(key);
+      return null;
+    },
+    set: (key, data) => {
+      cacheStore.set(key, { data, timestamp: Date.now() });
+    }
+  };
+};
+
+// Cache-Instanzen mit TTL
+const promptsCache = createCache(300000);    // 5 Minuten für Prompt Library
+const newsCache = createCache(300000);        // 5 Minuten für News
+const dailyChallengeCache = createCache(3600000); // 1 Stunde für Daily Challenge
+
+// ===================================================================
 // RATE LIMITING (In-Memory) - Priorität für Model Battle
 // ===================================================================
 
@@ -134,9 +161,11 @@ const createRateLimiter = (maxRequests, windowMs = 60000) => {
   };
 };
 
-// Rate limiters for different endpoints
-const modelBattleRateLimit = createRateLimiter(10, 60000);  // 10 req/min (HAUPTFEATURE)
-const generalRateLimit = createRateLimiter(30, 60000);       // 30 req/min (andere Endpoints)
+// Rate limiters for different endpoints (nach Briefing-Empfehlungen)
+const modelBattleRateLimit = createRateLimiter(10, 60000);    // 10 req/min (HAUPTFEATURE)
+const promptGeneratorRateLimit = createRateLimiter(20, 60000); // 20 req/min (Prompt Generator/Optimizer)
+const promptLibraryRateLimit = createRateLimiter(60, 60000);   // 60 req/min (Read-only Library)
+const generalRateLimit = createRateLimiter(30, 60000);         // 30 req/min (andere Endpoints)
 
 // ===================================================================
 // API KEY VALIDATION (NEW)
@@ -557,7 +586,7 @@ async function callClaude(systemPrompt, userPrompt, maxTokens = 1500) {
 // HEALTH CHECK & INFO ROUTES
 // ===================================================================
 
-const API_VERSION = "2.2";  // Unified version constant
+const API_VERSION = "2.3";  // Unified version constant - Optimierungen nach Frontend-Analyse
 
 // Main Health Check
 app.get("/", (req, res) => {
@@ -651,7 +680,7 @@ app.get("/api/self", (req, res) => {
 // FEATURE #1: PROMPT GENERATOR
 // ===================================================================
 
-app.post("/api/prompt-generator", async (req, res) => {
+app.post("/api/prompt-generator", promptGeneratorRateLimit, async (req, res) => {
   try {
     const { topic } = req.body;
 
@@ -735,7 +764,7 @@ Generiere 5 verschiedene Prompt-Styles (Executive, Technical, Creative, Tutorial
 // FEATURE #2: PROMPT OPTIMIZER
 // ===================================================================
 
-app.post("/api/prompt-optimizer", async (req, res) => {
+app.post("/api/prompt-optimizer", promptGeneratorRateLimit, async (req, res) => {
   try {
     const { prompt } = req.body;
 
@@ -826,9 +855,16 @@ Analysiere und optimiere diesen Prompt. Gib einen Score (1-10), liste Probleme, 
 // FEATURE #3: PROMPT LIBRARY
 // ===================================================================
 
-app.get("/api/prompts", (req, res) => {
+app.get("/api/prompts", promptLibraryRateLimit, (req, res) => {
   try {
     const { category, search, featured } = req.query;
+
+    // Cache-Key basierend auf Query-Parametern
+    const cacheKey = `prompts:${category || 'all'}:${search || ''}:${featured || ''}`;
+    const cached = promptsCache.get(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
 
     let filteredPrompts = [...FEATURED_PROMPTS];
 
@@ -859,15 +895,20 @@ app.get("/api/prompts", (req, res) => {
       return b.uses - a.uses;
     });
 
-    res.json({
+    const response = {
       success: true,
       count: filteredPrompts.length,
       prompts: filteredPrompts,
       categories: ["all", "creative", "business", "technical", "education", "writing", "ai", "communication", "data", "marketing", "productivity", "design", "innovation"],
       timestamp: new Date().toISOString(),
-    });
+    };
+
+    // Cache das Ergebnis
+    promptsCache.set(cacheKey, response);
+
+    res.json(response);
   } catch (error) {
-    console.error("Error in prompts:", error);
+    if (NODE_ENV === "development") console.error("Error in prompts:", error);
     res.status(500).json({
       error: "Failed to fetch prompts",
       message: error.message,
@@ -934,7 +975,7 @@ const sanitizePrompt = (prompt) => {
     .trim();
 };
 
-const API_TIMEOUT = 30000; // 30 Sekunden Timeout pro Model
+const API_TIMEOUT = 60000; // 60 Sekunden Timeout pro Model (empfohlen für KI-APIs)
 
 app.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
   try {
@@ -965,7 +1006,9 @@ app.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
       });
     }
 
-    console.log(`\n⚔️  Model Battle: "${cleanPrompt.slice(0, 50)}..." (${cleanPrompt.length} chars)`);
+    if (NODE_ENV === "development") {
+      console.log(`\n⚔️  Model Battle: "${cleanPrompt.slice(0, 50)}..." (${cleanPrompt.length} chars)`);
+    }
 
     // Parallel API Calls mit Timeout und Response Time Tracking
     const results = await Promise.allSettled([
@@ -1102,14 +1145,14 @@ app.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
     // Count successful responses for graceful degradation
     const successCount = responses.filter(r => r.success).length;
 
-    // Log response times
-    console.log("⏱️  Response Times:");
-    responses.forEach(r => {
-      console.log(`   ${r.name}: ${r.responseTime}ms ${r.success ? '✓' : '✗'}`);
-    });
-
-    // Graceful Degradation: Return results even if some models fail
-    console.log(`✅ Model Battle completed: ${successCount}/3 models successful`);
+    // Log response times (nur Development)
+    if (NODE_ENV === "development") {
+      console.log("⏱️  Response Times:");
+      responses.forEach(r => {
+        console.log(`   ${r.name}: ${r.responseTime}ms ${r.success ? '✓' : '✗'}`);
+      });
+      console.log(`✅ Model Battle completed: ${successCount}/3 models successful`);
+    }
 
     res.json({
       success: successCount > 0,  // Success if at least one model responded
@@ -1145,7 +1188,9 @@ app.get("/api/daily-challenge", async (req, res) => {
     const today = new Date();
     const dateString = today.toISOString().split('T')[0]; // YYYY-MM-DD
     
-    console.log(`\n🎯 Fetching Daily Challenge for ${dateString}`);
+    if (NODE_ENV === "development") {
+      console.log(`\n🎯 Fetching Daily Challenge for ${dateString}`);
+    }
 
     // Generate challenge based on date (same challenge for everyone on same day)
     const systemPrompt = `Du bist ein KI-Challenge-Designer. Erstelle eine tägliche KI-Challenge für das Datum ${dateString}.
@@ -1224,7 +1269,9 @@ Sei kreativ! Wechsle zwischen verschiedenen Themen: Content, Strategie, Analyse,
       }
     }
 
-    console.log(`✅ Generated challenge: "${challenge.theme}"`);
+    if (NODE_ENV === "development") {
+      console.log(`✅ Generated challenge: "${challenge.theme}"`);
+    }
 
     res.json({
       success: true,
@@ -1267,7 +1314,9 @@ app.post("/api/submit-challenge", async (req, res) => {
       });
     }
 
-    console.log(`\n🏆 Evaluating ${difficulty} challenge submission...`);
+    if (NODE_ENV === "development") {
+      console.log(`\n🏆 Evaluating ${difficulty} challenge submission...`);
+    }
 
     const systemPrompt = `Du bist ein KI-Challenge-Bewerter. Bewerte die eingereichte Antwort auf eine Daily Challenge.
 
@@ -1329,7 +1378,9 @@ Bewerte die Antwort und erstelle ein JSON-Objekt:
       }
     }
 
-    console.log(`✅ Evaluation complete: ${evaluation.badge.toUpperCase()} (${evaluation.score}%)`);
+    if (NODE_ENV === "development") {
+      console.log(`✅ Evaluation complete: ${evaluation.badge.toUpperCase()} (${evaluation.score}%)`);
+    }
 
     res.json({
       success: true,
@@ -1350,8 +1401,14 @@ Bewerte die Antwort und erstelle ein JSON-Objekt:
 // FEATURE #6: KI-NEWS - Daily Rotating AI News
 // ===================================================================
 
-app.get("/api/news", (req, res) => {
+app.get("/api/news", promptLibraryRateLimit, (req, res) => {
   try {
+    // Check cache first
+    const cached = newsCache.get('news');
+    if (cached) {
+      return res.json(cached);
+    }
+
     // Rotating news based on day of year
     const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
     
@@ -1431,17 +1488,24 @@ app.get("/api/news", (req, res) => {
       selectedNews.push(newsDatabase[index]);
     }
 
-    console.log(`📰 Serving ${selectedNews.length} news items (rotation: day ${dayOfYear})`);
+    if (NODE_ENV === "development") {
+      console.log(`📰 Serving ${selectedNews.length} news items (rotation: day ${dayOfYear})`);
+    }
 
-    res.json({
+    const response = {
       success: true,
       items: selectedNews,
       lastUpdated: new Date().toISOString(),
       rotationDay: dayOfYear
-    });
+    };
+
+    // Cache das Ergebnis
+    newsCache.set('news', response);
+
+    res.json(response);
 
   } catch (error) {
-    console.error("Error fetching news:", error);
+    if (NODE_ENV === "development") console.error("Error fetching news:", error);
     res.status(500).json({
       error: "Failed to fetch news",
       message: error.message
@@ -1619,7 +1683,9 @@ app.get("/api/spark/today", (req, res) => {
     // Select spark for today
     const todaysSpark = sparksDatabase[dayOfYear % sparksDatabase.length];
 
-    console.log(`✨ Serving Spark of the Day: "${todaysSpark.spark.substring(0, 50)}..."`);
+    if (NODE_ENV === "development") {
+      console.log(`✨ Serving Spark of the Day: "${todaysSpark.spark.substring(0, 50)}..."`);
+    }
 
     res.json({
       success: true,
