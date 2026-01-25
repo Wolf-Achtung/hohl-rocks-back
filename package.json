@@ -1,6 +1,6 @@
 {
   "name": "hohl-rocks-backend",
-  "version": "2.1.0",
+  "version": "2.3.0",
   "description": "HOHL.ROCKS Backend - AI Prompt Platform API",
   "main": "server.js",
   "type": "module",
