@@ -589,7 +589,7 @@ async function callClaude(systemPrompt, userPrompt, maxTokens = 1500) {
 // HEALTH CHECK & INFO ROUTES
 // ===================================================================
 
-const API_VERSION = "2.4";  // Unified version constant - Gemini als 4. Modell hinzugefügt
+const API_VERSION = "2.5";  // Unified version constant - /api/chat Endpoint hinzugefügt
 
 // Main Health Check
 app.get("/", (req, res) => {
@@ -1240,6 +1240,95 @@ app.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
       success: false,
       error: "Internal server error",
       message: NODE_ENV === "development" ? error.message : "Ein Fehler ist aufgetreten",
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// ===================================================================
+// FEATURE #4b: SIMPLE CHAT - Single Model Chat (Default: Claude)
+// ===================================================================
+
+app.post("/api/chat", generalRateLimit, async (req, res) => {
+  try {
+    const { messages, model = "claude" } = req.body;
+
+    // Validate messages array
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({
+        error: "Messages array required",
+        message: "Please provide a messages array with role and content"
+      });
+    }
+
+    if (messages.length === 0) {
+      return res.status(400).json({
+        error: "Empty messages array",
+        message: "Please provide at least one message"
+      });
+    }
+
+    // Extract system and user messages
+    const systemMessage = messages.find(m => m.role === "system")?.content || "";
+    const userMessages = messages.filter(m => m.role === "user" || m.role === "assistant");
+
+    if (userMessages.length === 0) {
+      return res.status(400).json({
+        error: "No user message found",
+        message: "Please provide at least one user message"
+      });
+    }
+
+    // Validate message content length
+    const totalLength = userMessages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
+    if (totalLength > 4000) {
+      return res.status(400).json({
+        error: "Messages too long",
+        message: "Total message content exceeds 4000 characters"
+      });
+    }
+
+    if (NODE_ENV === "development") {
+      console.log(`\n💬 Chat request (model: ${model})`);
+    }
+
+    const startTime = Date.now();
+
+    // Use Claude as default (and currently only supported model)
+    const response = await withTimeout(
+      anthropic.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1024,
+        system: systemMessage || undefined,
+        messages: userMessages.map(m => ({
+          role: m.role,
+          content: sanitizePrompt(m.content || "")
+        }))
+      }),
+      API_TIMEOUT,
+      "Claude Chat"
+    );
+
+    const responseTime = Date.now() - startTime;
+
+    if (NODE_ENV === "development") {
+      console.log(`✅ Chat completed in ${responseTime}ms`);
+    }
+
+    res.json({
+      success: true,
+      response: response.content[0].text,
+      model: "claude",
+      responseTime,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    if (NODE_ENV === "development") console.error("Chat error:", error.message);
+    res.status(500).json({
+      success: false,
+      error: "Chat failed",
+      message: error.message.includes("timeout") ? "Zeitüberschreitung" : "Service vorübergehend nicht verfügbar",
       timestamp: new Date().toISOString()
     });
   }
