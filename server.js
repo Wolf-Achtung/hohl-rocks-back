@@ -88,6 +88,9 @@ const openai = new OpenAI({
 // Perplexity (via fetch)
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
 
+// Gemini (via fetch)
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
 // ===================================================================
 // CACHING (In-Memory) - Für statische/semi-statische Endpoints
 // ===================================================================
@@ -586,7 +589,7 @@ async function callClaude(systemPrompt, userPrompt, maxTokens = 1500) {
 // HEALTH CHECK & INFO ROUTES
 // ===================================================================
 
-const API_VERSION = "2.3";  // Unified version constant - Optimierungen nach Frontend-Analyse
+const API_VERSION = "2.4";  // Unified version constant - Gemini als 4. Modell hinzugefügt
 
 // Main Health Check
 app.get("/", (req, res) => {
@@ -1127,6 +1130,70 @@ app.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
             success: false
           };
         }
+      })(),
+
+      // Gemini 1.5 Flash
+      (async () => {
+        const startTime = Date.now();
+        try {
+          // Skip if no API key
+          if (!GEMINI_API_KEY) {
+            return {
+              model: "gemini",
+              name: "Gemini 1.5 Flash",
+              response: null,
+              error: "API Key nicht konfiguriert",
+              responseTime: Date.now() - startTime,
+              success: false
+            };
+          }
+
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
+
+          const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: cleanPrompt }] }],
+                generationConfig: {
+                  maxOutputTokens: 1024,
+                  temperature: 0.7
+                }
+              }),
+              signal: controller.signal
+            }
+          );
+
+          clearTimeout(timeoutId);
+
+          if (!response.ok) {
+            throw new Error(`Gemini API error: ${response.status}`);
+          }
+
+          const data = await response.json();
+          const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "Keine Antwort";
+
+          return {
+            model: "gemini",
+            name: "Gemini 1.5 Flash",
+            response: text,
+            responseTime: Date.now() - startTime,
+            success: true
+          };
+        } catch (error) {
+          console.error("Gemini error:", error.message);
+          return {
+            model: "gemini",
+            name: "Gemini 1.5 Flash",
+            response: null,
+            error: error.name === 'AbortError' ? "Zeitüberschreitung" : "Service vorübergehend nicht verfügbar",
+            responseTime: Date.now() - startTime,
+            success: false
+          };
+        }
       })()
     ]);
 
@@ -1151,18 +1218,18 @@ app.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
       responses.forEach(r => {
         console.log(`   ${r.name}: ${r.responseTime}ms ${r.success ? '✓' : '✗'}`);
       });
-      console.log(`✅ Model Battle completed: ${successCount}/3 models successful`);
+      console.log(`✅ Model Battle completed: ${successCount}/4 models successful`);
     }
 
     res.json({
       success: successCount > 0,  // Success if at least one model responded
-      partialFailure: successCount < 3 && successCount > 0,
+      partialFailure: successCount < 4 && successCount > 0,
       prompt: cleanPrompt,
       responses,
       meta: {
         successfulModels: successCount,
-        totalModels: 3,
-        avgResponseTime: Math.round(responses.reduce((sum, r) => sum + r.responseTime, 0) / 3)
+        totalModels: 4,
+        avgResponseTime: Math.round(responses.reduce((sum, r) => sum + r.responseTime, 0) / 4)
       },
       timestamp: new Date().toISOString()
     });
