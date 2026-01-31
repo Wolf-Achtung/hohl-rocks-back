@@ -589,7 +589,7 @@ async function callClaude(systemPrompt, userPrompt, maxTokens = 1500) {
 // HEALTH CHECK & INFO ROUTES
 // ===================================================================
 
-const API_VERSION = "2.5";  // Unified version constant - /api/chat Endpoint hinzugefügt
+const API_VERSION = "2.5.1";  // Unified version constant - Gemini 2.0 Flash fix
 
 // Main Health Check
 app.get("/", (req, res) => {
@@ -1140,7 +1140,7 @@ app.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
           if (!GEMINI_API_KEY) {
             return {
               model: "gemini",
-              name: "Gemini 1.5 Flash",
+              name: "Gemini 2.0 Flash",
               response: null,
               error: "API Key nicht konfiguriert",
               responseTime: Date.now() - startTime,
@@ -1152,7 +1152,7 @@ app.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
           const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
 
           const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -1178,7 +1178,7 @@ app.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
 
           return {
             model: "gemini",
-            name: "Gemini 1.5 Flash",
+            name: "Gemini 2.0 Flash",
             response: text,
             responseTime: Date.now() - startTime,
             success: true
@@ -1187,7 +1187,7 @@ app.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
           console.error("Gemini error:", error.message);
           return {
             model: "gemini",
-            name: "Gemini 1.5 Flash",
+            name: "Gemini 2.0 Flash",
             response: null,
             error: error.name === 'AbortError' ? "Zeitüberschreitung" : "Service vorübergehend nicht verfügbar",
             responseTime: Date.now() - startTime,
