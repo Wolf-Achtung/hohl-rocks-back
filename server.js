@@ -175,29 +175,48 @@ const generalRateLimit = createRateLimiter(30, 60000);         // 30 req/min (an
 // ===================================================================
 
 const validateApiKeys = () => {
-  const errors = [];
-  
+  const requiredKeys = [];
+  const optionalKeys = [];
+
+  // Required: At minimum we need Claude for chat endpoint
   if (!process.env.ANTHROPIC_API_KEY) {
-    errors.push("❌ ANTHROPIC_API_KEY missing");
+    requiredKeys.push("❌ ANTHROPIC_API_KEY missing (REQUIRED)");
   }
-  
+
+  // Optional: Model Battle works with graceful degradation
   if (!process.env.OPENAI_API_KEY) {
-    errors.push("❌ OPENAI_API_KEY missing");
+    optionalKeys.push("⚠️  OPENAI_API_KEY missing (GPT will be unavailable in Model Battle)");
   }
-  
+
   if (!process.env.PERPLEXITY_API_KEY) {
-    errors.push("❌ PERPLEXITY_API_KEY missing");
+    optionalKeys.push("⚠️  PERPLEXITY_API_KEY missing (Perplexity will be unavailable in Model Battle)");
   }
-  
-  if (errors.length > 0) {
-    console.error("\n⚠️  API KEY VALIDATION FAILED:");
-    errors.forEach(err => console.error(err));
-    console.error("\n");
-  } else {
-    console.log("✅ All API keys validated");
+
+  if (!process.env.GEMINI_API_KEY) {
+    optionalKeys.push("⚠️  GEMINI_API_KEY missing (Gemini will be unavailable in Model Battle)");
   }
-  
-  return errors.length === 0;
+
+  // Log status
+  if (requiredKeys.length > 0) {
+    console.error("\n❌ REQUIRED API KEYS MISSING:");
+    requiredKeys.forEach(err => console.error(err));
+  }
+
+  if (optionalKeys.length > 0) {
+    console.warn("\n⚠️  OPTIONAL API KEYS MISSING (graceful degradation active):");
+    optionalKeys.forEach(warn => console.warn(warn));
+  }
+
+  if (requiredKeys.length === 0 && optionalKeys.length === 0) {
+    console.log("✅ All API keys validated (4/4 configured)");
+  } else if (requiredKeys.length === 0) {
+    console.log(`✅ Required API keys validated. Optional: ${4 - optionalKeys.length - 1}/3 configured`);
+  }
+
+  console.log("");
+
+  // Only fail if REQUIRED keys are missing
+  return requiredKeys.length === 0;
 };
 
 // ===================================================================
