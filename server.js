@@ -1,7 +1,7 @@
 // ===================================================================
 // HOHL.ROCKS BACKEND - Node.js/Express Server (OPTIMIZED)
 // Features: Prompt Generator + Optimizer + Library + Model Battle + Daily Challenge + News + Spark
-// Version: 2.6 - Web & Mobile Optimizations
+// Version: 2.7 - Conversation Logging & Security
 // ===================================================================
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -9,10 +9,224 @@ import OpenAI from "openai";
 import express from "express";
 import cors from "cors";
 import compression from "compression";
+import cookieParser from "cookie-parser";
+import pg from "pg";
+import { v4 as uuidv4 } from "uuid";
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 const NODE_ENV = process.env.NODE_ENV || "development";
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
+
+// ===================================================================
+// DATABASE CONNECTION (PostgreSQL with graceful degradation)
+// ===================================================================
+
+let pool = null;
+let dbConnected = false;
+
+if (process.env.DATABASE_URL) {
+  try {
+    pool = new pg.Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000
+    });
+
+    // Test connection
+    pool.query('SELECT NOW()')
+      .then(() => {
+        dbConnected = true;
+        console.log('✅ PostgreSQL connected');
+        // Initialize tables
+        initDatabase();
+      })
+      .catch(err => {
+        console.warn('⚠️  PostgreSQL connection failed, using in-memory fallback:', err.message);
+        pool = null;
+      });
+  } catch (error) {
+    console.warn('⚠️  PostgreSQL setup failed, using in-memory fallback:', error.message);
+  }
+} else {
+  console.log('ℹ️  DATABASE_URL not set, using in-memory chat logging');
+}
+
+// Initialize database tables
+async function initDatabase() {
+  if (!pool) return;
+
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_logs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        session_id VARCHAR(64) NOT NULL,
+        user_message TEXT NOT NULL,
+        ai_response TEXT,
+        model VARCHAR(32) DEFAULT 'claude',
+        ip_address VARCHAR(45),
+        user_agent TEXT,
+        flagged BOOLEAN DEFAULT FALSE,
+        flag_reason VARCHAR(255),
+        response_time_ms INTEGER,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      )
+    `);
+
+    // Create indexes if they don't exist
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_logs_created_at ON chat_logs (created_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_logs_session ON chat_logs (session_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_logs_flagged ON chat_logs (flagged) WHERE flagged = TRUE`);
+
+    console.log('✅ Database tables initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize database tables:', error.message);
+  }
+}
+
+// In-Memory fallback for chat logs (limited to last 1000 entries)
+const inMemoryChatLogs = [];
+const MAX_MEMORY_LOGS = 1000;
+
+// ===================================================================
+// CONTENT MODERATION
+// ===================================================================
+
+const BLOCKED_KEYWORDS = [
+  // Illegale Aktivitäten
+  'bombe', 'waffe', 'drogen', 'hack', 'ddos', 'exploit', 'malware', 'virus',
+  // Gewalt
+  'töten', 'morden', 'verletzen', 'angriff', 'umbringen',
+  // Betrug
+  'betrug', 'scam', 'phishing', 'kreditkarte stehlen',
+  // Englisch
+  'bomb', 'weapon', 'drugs', 'kill', 'murder', 'attack'
+];
+
+const BLOCKED_PATTERNS = [
+  /wie\s+(bau|mach|erstell).*\s+(bombe|waffe|virus|malware)/i,
+  /anleitung\s+(für|zu|zum)\s+(hack|einbruch|betrug)/i,
+  /passwort\s+(knack|hack|brech|steal)/i,
+  /how\s+to\s+(make|build|create).*\s+(bomb|weapon|virus)/i,
+  /hack\s+(into|password|account)/i
+];
+
+function moderateContent(text) {
+  if (!text || typeof text !== 'string') {
+    return { flagged: false, reason: null };
+  }
+
+  const lowerText = text.toLowerCase();
+
+  // 1. Keyword-Check
+  for (const keyword of BLOCKED_KEYWORDS) {
+    if (lowerText.includes(keyword)) {
+      return {
+        flagged: true,
+        reason: `blocked_keyword:${keyword}`
+      };
+    }
+  }
+
+  // 2. Pattern-Check
+  for (const pattern of BLOCKED_PATTERNS) {
+    if (pattern.test(text)) {
+      return {
+        flagged: true,
+        reason: `blocked_pattern`
+      };
+    }
+  }
+
+  return { flagged: false, reason: null };
+}
+
+// ===================================================================
+// CONVERSATION LOGGING
+// ===================================================================
+
+async function logConversation(data) {
+  const logEntry = {
+    id: uuidv4(),
+    session_id: data.sessionId,
+    user_message: data.userMessage,
+    ai_response: data.aiResponse,
+    model: data.model || 'claude',
+    ip_address: data.ipAddress,
+    user_agent: data.userAgent,
+    flagged: data.flagged || false,
+    flag_reason: data.flagReason || null,
+    response_time_ms: data.responseTimeMs,
+    created_at: new Date().toISOString()
+  };
+
+  // Try PostgreSQL first
+  if (pool && dbConnected) {
+    try {
+      await pool.query(`
+        INSERT INTO chat_logs
+          (session_id, user_message, ai_response, model, ip_address, user_agent, flagged, flag_reason, response_time_ms)
+        VALUES
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `, [
+        logEntry.session_id,
+        logEntry.user_message,
+        logEntry.ai_response,
+        logEntry.model,
+        logEntry.ip_address,
+        logEntry.user_agent,
+        logEntry.flagged,
+        logEntry.flag_reason,
+        logEntry.response_time_ms
+      ]);
+      return;
+    } catch (error) {
+      console.error('Failed to log to PostgreSQL:', error.message);
+      // Fall through to in-memory
+    }
+  }
+
+  // In-memory fallback
+  inMemoryChatLogs.unshift(logEntry);
+  if (inMemoryChatLogs.length > MAX_MEMORY_LOGS) {
+    inMemoryChatLogs.pop();
+  }
+}
+
+// Get or create session ID from cookie
+function getSessionId(req, res) {
+  let sessionId = req.cookies?.chat_session;
+  if (!sessionId) {
+    sessionId = uuidv4();
+    res.cookie('chat_session', sessionId, {
+      httpOnly: true,
+      secure: NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    });
+  }
+  return sessionId;
+}
+
+// Admin authentication middleware
+function adminAuth(req, res, next) {
+  const apiKey = req.headers['x-admin-key'];
+
+  if (!ADMIN_API_KEY) {
+    return res.status(503).json({
+      error: 'Admin API not configured',
+      message: 'ADMIN_API_KEY environment variable not set'
+    });
+  }
+
+  if (!apiKey || apiKey !== ADMIN_API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  next();
+}
 
 // ===================================================================
 // LOGGING MIDDLEWARE (NEW)
@@ -103,6 +317,7 @@ const validateRequired = (value, fieldName, minLength = 1, maxLength = 10000) =>
 // ===================================================================
 
 app.use(express.json({ limit: "10mb" }));
+app.use(cookieParser());
 
 // CORS Configuration - Optimized for Production + Railway + Netlify
 const allowedOrigins = process.env.ALLOWED_ORIGINS
@@ -768,7 +983,12 @@ app.get("/healthz", (req, res) => {
     status: "healthy",
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    memory: process.memoryUsage()
+    memory: process.memoryUsage(),
+    database: {
+      configured: !!process.env.DATABASE_URL,
+      connected: dbConnected,
+      fallback: !dbConnected ? 'in-memory' : null
+    }
   });
 });
 
@@ -776,10 +996,12 @@ app.get("/healthz", (req, res) => {
 app.get("/readyz", async (req, res) => {
   const checks = {
     server: true,
+    database: dbConnected || true, // In-memory fallback is always available
     anthropic_configured: !!process.env.ANTHROPIC_API_KEY,
     openai_configured: !!process.env.OPENAI_API_KEY,
     perplexity_configured: !!process.env.PERPLEXITY_API_KEY,
-    gemini_configured: !!process.env.GEMINI_API_KEY
+    gemini_configured: !!process.env.GEMINI_API_KEY,
+    admin_configured: !!process.env.ADMIN_API_KEY
   };
 
   // Server is ready if at least Anthropic (required) is configured
@@ -1425,6 +1647,9 @@ app.post("/api/chat", generalRateLimit, async (req, res) => {
   // No caching for dynamic chat responses
   setNoCacheHeaders(res);
 
+  const startTime = Date.now();
+  const sessionId = getSessionId(req, res);
+
   try {
     const { messages, model = "claude" } = req.body;
 
@@ -1454,6 +1679,9 @@ app.post("/api/chat", generalRateLimit, async (req, res) => {
       });
     }
 
+    // Get the last user message for logging and moderation
+    const lastUserMessage = userMessages.filter(m => m.role === "user").pop()?.content || "";
+
     // Validate message content length
     const totalLength = userMessages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
     if (totalLength > 4000) {
@@ -1463,11 +1691,39 @@ app.post("/api/chat", generalRateLimit, async (req, res) => {
       });
     }
 
+    // ===== CONTENT MODERATION =====
+    const modResult = moderateContent(lastUserMessage);
+
+    if (modResult.flagged) {
+      // Log the flagged attempt
+      await logConversation({
+        sessionId,
+        userMessage: lastUserMessage,
+        aiResponse: null,
+        model,
+        ipAddress: req.ip || req.connection?.remoteAddress,
+        userAgent: req.get('User-Agent'),
+        flagged: true,
+        flagReason: modResult.reason,
+        responseTimeMs: Date.now() - startTime
+      });
+
+      if (NODE_ENV === "development") {
+        console.log(`⚠️  Flagged message: ${modResult.reason}`);
+      }
+
+      return res.json({
+        success: true,
+        response: "Das ist nicht mein Thema. Frag mich lieber was über KI, meine Arbeit oder den SC Freiburg! ⚽",
+        model: "moderation",
+        flagged: true,
+        timestamp: new Date().toISOString()
+      });
+    }
+
     if (NODE_ENV === "development") {
       console.log(`\n💬 Chat request (model: ${model})`);
     }
-
-    const startTime = Date.now();
 
     // Use Claude as default (and currently only supported model)
     const response = await withTimeout(
@@ -1485,6 +1741,20 @@ app.post("/api/chat", generalRateLimit, async (req, res) => {
     );
 
     const responseTime = Date.now() - startTime;
+    const aiResponse = response.content[0].text;
+
+    // ===== LOG CONVERSATION =====
+    await logConversation({
+      sessionId,
+      userMessage: lastUserMessage,
+      aiResponse,
+      model,
+      ipAddress: req.ip || req.connection?.remoteAddress,
+      userAgent: req.get('User-Agent'),
+      flagged: false,
+      flagReason: null,
+      responseTimeMs: responseTime
+    });
 
     if (NODE_ENV === "development") {
       console.log(`✅ Chat completed in ${responseTime}ms`);
@@ -1492,13 +1762,26 @@ app.post("/api/chat", generalRateLimit, async (req, res) => {
 
     res.json({
       success: true,
-      response: response.content[0].text,
+      response: aiResponse,
       model: "claude",
       responseTime,
       timestamp: new Date().toISOString()
     });
 
   } catch (error) {
+    // Log failed attempts too
+    await logConversation({
+      sessionId,
+      userMessage: req.body?.messages?.filter(m => m.role === "user").pop()?.content || "unknown",
+      aiResponse: null,
+      model: "claude",
+      ipAddress: req.ip || req.connection?.remoteAddress,
+      userAgent: req.get('User-Agent'),
+      flagged: false,
+      flagReason: `error:${error.message}`,
+      responseTimeMs: Date.now() - startTime
+    });
+
     if (NODE_ENV === "development") console.error("Chat error:", error.message);
     res.status(500).json({
       success: false,
@@ -2070,6 +2353,398 @@ app.get("/api/spark/today", (req, res) => {
 });
 
 // ===================================================================
+// ADMIN ENDPOINTS - Chat Logs Management
+// ===================================================================
+
+// Get all chat logs (with pagination)
+app.get("/api/admin/chat-logs", adminAuth, async (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 50), 200);
+  const offset = (page - 1) * limit;
+  const onlyFlagged = req.query.flagged === 'true';
+
+  try {
+    // PostgreSQL
+    if (pool && dbConnected) {
+      let query = 'SELECT * FROM chat_logs';
+      let countQuery = 'SELECT COUNT(*) FROM chat_logs';
+      const params = [];
+
+      if (onlyFlagged) {
+        query += ' WHERE flagged = TRUE';
+        countQuery += ' WHERE flagged = TRUE';
+      }
+
+      query += ' ORDER BY created_at DESC LIMIT $1 OFFSET $2';
+      params.push(limit, offset);
+
+      const [logs, countResult] = await Promise.all([
+        pool.query(query, params),
+        pool.query(countQuery)
+      ]);
+
+      return res.json({
+        success: true,
+        logs: logs.rows,
+        pagination: {
+          page,
+          limit,
+          total: parseInt(countResult.rows[0].count),
+          pages: Math.ceil(countResult.rows[0].count / limit)
+        },
+        source: 'postgresql'
+      });
+    }
+
+    // In-Memory fallback
+    let filteredLogs = onlyFlagged
+      ? inMemoryChatLogs.filter(log => log.flagged)
+      : inMemoryChatLogs;
+
+    const total = filteredLogs.length;
+    const paginatedLogs = filteredLogs.slice(offset, offset + limit);
+
+    res.json({
+      success: true,
+      logs: paginatedLogs,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      },
+      source: 'memory'
+    });
+  } catch (error) {
+    console.error('Admin chat-logs error:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch chat logs',
+      message: error.message
+    });
+  }
+});
+
+// Get logs for a specific session
+app.get("/api/admin/chat-logs/session/:sessionId", adminAuth, async (req, res) => {
+  const { sessionId } = req.params;
+
+  try {
+    // PostgreSQL
+    if (pool && dbConnected) {
+      const result = await pool.query(
+        'SELECT * FROM chat_logs WHERE session_id = $1 ORDER BY created_at ASC',
+        [sessionId]
+      );
+
+      return res.json({
+        success: true,
+        conversation: result.rows,
+        source: 'postgresql'
+      });
+    }
+
+    // In-Memory fallback
+    const sessionLogs = inMemoryChatLogs
+      .filter(log => log.session_id === sessionId)
+      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+    res.json({
+      success: true,
+      conversation: sessionLogs,
+      source: 'memory'
+    });
+  } catch (error) {
+    console.error('Admin session logs error:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch session logs',
+      message: error.message
+    });
+  }
+});
+
+// Get chat statistics
+app.get("/api/admin/chat-stats", adminAuth, async (req, res) => {
+  try {
+    // PostgreSQL
+    if (pool && dbConnected) {
+      const [summary, daily] = await Promise.all([
+        pool.query(`
+          SELECT
+            COUNT(*) as total_messages,
+            COUNT(DISTINCT session_id) as unique_sessions,
+            COUNT(*) FILTER (WHERE flagged = TRUE) as flagged_messages,
+            AVG(response_time_ms)::INTEGER as avg_response_time
+          FROM chat_logs
+          WHERE created_at > NOW() - INTERVAL '30 days'
+        `),
+        pool.query(`
+          SELECT
+            DATE_TRUNC('day', created_at) as day,
+            COUNT(*) as messages
+          FROM chat_logs
+          WHERE created_at > NOW() - INTERVAL '30 days'
+          GROUP BY DATE_TRUNC('day', created_at)
+          ORDER BY day DESC
+        `)
+      ]);
+
+      return res.json({
+        success: true,
+        summary: {
+          totalMessages: parseInt(summary.rows[0]?.total_messages || 0),
+          uniqueSessions: parseInt(summary.rows[0]?.unique_sessions || 0),
+          flaggedMessages: parseInt(summary.rows[0]?.flagged_messages || 0),
+          avgResponseTime: parseInt(summary.rows[0]?.avg_response_time || 0)
+        },
+        dailyStats: daily.rows,
+        source: 'postgresql'
+      });
+    }
+
+    // In-Memory fallback
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const recentLogs = inMemoryChatLogs.filter(log => new Date(log.created_at) > thirtyDaysAgo);
+
+    const uniqueSessions = new Set(recentLogs.map(log => log.session_id)).size;
+    const flaggedCount = recentLogs.filter(log => log.flagged).length;
+    const avgResponseTime = recentLogs.length > 0
+      ? Math.round(recentLogs.reduce((sum, log) => sum + (log.response_time_ms || 0), 0) / recentLogs.length)
+      : 0;
+
+    res.json({
+      success: true,
+      summary: {
+        totalMessages: recentLogs.length,
+        uniqueSessions,
+        flaggedMessages: flaggedCount,
+        avgResponseTime
+      },
+      dailyStats: [],
+      source: 'memory'
+    });
+  } catch (error) {
+    console.error('Admin chat-stats error:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch chat statistics',
+      message: error.message
+    });
+  }
+});
+
+// Flag/unflag a chat log entry
+app.patch("/api/admin/chat-logs/:id/flag", adminAuth, async (req, res) => {
+  const { id } = req.params;
+  const { flagged, reason } = req.body;
+
+  try {
+    // PostgreSQL
+    if (pool && dbConnected) {
+      await pool.query(
+        'UPDATE chat_logs SET flagged = $1, flag_reason = $2 WHERE id = $3',
+        [flagged, reason, id]
+      );
+
+      return res.json({ success: true, source: 'postgresql' });
+    }
+
+    // In-Memory fallback
+    const logEntry = inMemoryChatLogs.find(log => log.id === id);
+    if (logEntry) {
+      logEntry.flagged = flagged;
+      logEntry.flag_reason = reason;
+      return res.json({ success: true, source: 'memory' });
+    }
+
+    res.status(404).json({
+      success: false,
+      error: 'Log entry not found'
+    });
+  } catch (error) {
+    console.error('Admin flag error:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update flag',
+      message: error.message
+    });
+  }
+});
+
+// Export chat logs as CSV
+app.get("/api/admin/chat-logs/export", adminAuth, async (req, res) => {
+  const { from, to } = req.query;
+
+  try {
+    let logs = [];
+
+    // PostgreSQL
+    if (pool && dbConnected) {
+      const result = await pool.query(`
+        SELECT
+          created_at,
+          session_id,
+          user_message,
+          ai_response,
+          flagged,
+          flag_reason,
+          response_time_ms
+        FROM chat_logs
+        WHERE created_at BETWEEN $1 AND $2
+        ORDER BY created_at DESC
+      `, [from || '1970-01-01', to || new Date().toISOString()]);
+
+      logs = result.rows;
+    } else {
+      // In-Memory fallback
+      const fromDate = from ? new Date(from) : new Date(0);
+      const toDate = to ? new Date(to) : new Date();
+
+      logs = inMemoryChatLogs.filter(log => {
+        const logDate = new Date(log.created_at);
+        return logDate >= fromDate && logDate <= toDate;
+      });
+    }
+
+    // Generate CSV
+    const headers = ['Datum', 'Session', 'User-Nachricht', 'KI-Antwort', 'Markiert', 'Grund', 'Antwortzeit (ms)'];
+    const csv = [
+      headers.join(';'),
+      ...logs.map(row => [
+        row.created_at,
+        row.session_id,
+        `"${(row.user_message || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
+        `"${(row.ai_response || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
+        row.flagged ? 'Ja' : 'Nein',
+        row.flag_reason || '',
+        row.response_time_ms
+      ].join(';'))
+    ].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename=chat-logs-${new Date().toISOString().split('T')[0]}.csv`);
+    res.send('\uFEFF' + csv); // BOM for Excel compatibility
+  } catch (error) {
+    console.error('Admin export error:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to export chat logs',
+      message: error.message
+    });
+  }
+});
+
+// ===================================================================
+// GDPR COMPLIANCE ENDPOINTS - User Data Access/Deletion
+// ===================================================================
+
+// Get user's own data (via session cookie)
+app.get("/api/my-data", async (req, res) => {
+  const sessionId = req.cookies?.chat_session;
+
+  if (!sessionId) {
+    return res.status(400).json({
+      success: false,
+      error: 'Keine Session gefunden',
+      message: 'Du hast keine aktive Chat-Session.'
+    });
+  }
+
+  try {
+    // PostgreSQL
+    if (pool && dbConnected) {
+      const result = await pool.query(
+        'SELECT created_at, user_message, ai_response FROM chat_logs WHERE session_id = $1 ORDER BY created_at ASC',
+        [sessionId]
+      );
+
+      return res.json({
+        success: true,
+        sessionId,
+        conversations: result.rows,
+        count: result.rows.length
+      });
+    }
+
+    // In-Memory fallback
+    const sessionLogs = inMemoryChatLogs
+      .filter(log => log.session_id === sessionId)
+      .map(log => ({
+        created_at: log.created_at,
+        user_message: log.user_message,
+        ai_response: log.ai_response
+      }))
+      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+    res.json({
+      success: true,
+      sessionId,
+      conversations: sessionLogs,
+      count: sessionLogs.length
+    });
+  } catch (error) {
+    console.error('My-data error:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Daten konnten nicht abgerufen werden',
+      message: error.message
+    });
+  }
+});
+
+// Delete user's own data (via session cookie)
+app.delete("/api/my-data", async (req, res) => {
+  const sessionId = req.cookies?.chat_session;
+
+  if (!sessionId) {
+    return res.status(400).json({
+      success: false,
+      error: 'Keine Session gefunden',
+      message: 'Du hast keine aktive Chat-Session.'
+    });
+  }
+
+  try {
+    let deletedCount = 0;
+
+    // PostgreSQL
+    if (pool && dbConnected) {
+      const result = await pool.query(
+        'DELETE FROM chat_logs WHERE session_id = $1',
+        [sessionId]
+      );
+      deletedCount = result.rowCount;
+    } else {
+      // In-Memory fallback
+      const initialLength = inMemoryChatLogs.length;
+      for (let i = inMemoryChatLogs.length - 1; i >= 0; i--) {
+        if (inMemoryChatLogs[i].session_id === sessionId) {
+          inMemoryChatLogs.splice(i, 1);
+        }
+      }
+      deletedCount = initialLength - inMemoryChatLogs.length;
+    }
+
+    // Clear the session cookie
+    res.clearCookie('chat_session');
+
+    res.json({
+      success: true,
+      message: 'Alle deine Chat-Daten wurden gelöscht.',
+      deletedCount
+    });
+  } catch (error) {
+    console.error('Delete my-data error:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Daten konnten nicht gelöscht werden',
+      message: error.message
+    });
+  }
+});
+
+// ===================================================================
 // ERROR HANDLERS (NEW)
 // ===================================================================
 
@@ -2093,7 +2768,11 @@ app.use((req, res) => {
       "GET /api/daily-challenge",
       "POST /api/submit-challenge",
       "GET /api/news",
-      "GET /api/spark/today"
+      "GET /api/spark/today",
+      "GET /api/my-data",
+      "DELETE /api/my-data",
+      "GET /api/admin/chat-logs (Auth)",
+      "GET /api/admin/chat-stats (Auth)"
     ],
     timestamp: new Date().toISOString()
   });
