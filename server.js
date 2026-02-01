@@ -1,13 +1,14 @@
 // ===================================================================
 // HOHL.ROCKS BACKEND - Node.js/Express Server (OPTIMIZED)
 // Features: Prompt Generator + Optimizer + Library + Model Battle + Daily Challenge + News + Spark
-// Version: 2.1 - Added News & Spark Features
+// Version: 2.6 - Web & Mobile Optimizations
 // ===================================================================
 
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import express from "express";
 import cors from "cors";
+import compression from "compression";
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -30,13 +31,81 @@ const requestLogger = (req, res, next) => {
 app.use(requestLogger);
 
 // ===================================================================
+// COMPRESSION MIDDLEWARE (NEW)
+// ===================================================================
+
+app.use(compression({
+  level: 6,
+  threshold: 1024,
+  filter: (req, res) => {
+    if (req.headers['x-no-compression']) return false;
+    return compression.filter(req, res);
+  }
+}));
+
+// ===================================================================
+// RESPONSE HELPERS (NEW)
+// ===================================================================
+
+const sendSuccess = (res, data, meta = {}) => {
+  res.json({
+    success: true,
+    data,
+    meta: {
+      timestamp: new Date().toISOString(),
+      ...meta
+    }
+  });
+};
+
+const sendError = (res, status, message, code = 'ERROR') => {
+  res.status(status).json({
+    success: false,
+    error: {
+      code,
+      message
+    }
+  });
+};
+
+// Cache headers helpers
+const setCacheHeaders = (res, maxAge = 300, staleWhileRevalidate = 600) => {
+  res.set({
+    'Cache-Control': `public, max-age=${maxAge}, stale-while-revalidate=${staleWhileRevalidate}`,
+    'Vary': 'Accept-Encoding'
+  });
+};
+
+const setNoCacheHeaders = (res) => {
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate',
+    'Pragma': 'no-cache'
+  });
+};
+
+// Input validation helpers
+const validateRequired = (value, fieldName, minLength = 1, maxLength = 10000) => {
+  if (!value || typeof value !== 'string') {
+    return `${fieldName} ist erforderlich`;
+  }
+  const trimmed = value.trim();
+  if (trimmed.length < minLength) {
+    return `${fieldName} muss mindestens ${minLength} Zeichen haben`;
+  }
+  if (trimmed.length > maxLength) {
+    return `${fieldName} darf maximal ${maxLength} Zeichen haben`;
+  }
+  return null;
+};
+
+// ===================================================================
 // MIDDLEWARE
 // ===================================================================
 
 app.use(express.json({ limit: "10mb" }));
 
-// CORS Configuration - Fixed for Production + Railway
-const allowedOrigins = process.env.ALLOWED_ORIGINS 
+// CORS Configuration - Optimized for Production + Railway + Netlify
+const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",")
   : [
       // Development
@@ -52,21 +121,36 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
       "https://hohl-rocks-back-production.up.railway.app"
     ];
 
+// Regex patterns for dynamic origins (Netlify preview deployments)
+const allowedOriginPatterns = [
+  /\.netlify\.app$/,
+  /\.railway\.app$/
+];
+
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (mobile apps, Postman, etc.)
     if (!origin) return callback(null, true);
-    
+
+    // Check exact matches
     if (allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      console.warn(`⚠️  CORS blocked: ${origin}`);
-      callback(new Error("Not allowed by CORS"));
+      return callback(null, true);
     }
+
+    // Check regex patterns (Netlify/Railway preview deployments)
+    for (const pattern of allowedOriginPatterns) {
+      if (pattern.test(origin)) {
+        return callback(null, true);
+      }
+    }
+
+    console.warn(`⚠️  CORS blocked: ${origin}`);
+    callback(new Error("Not allowed by CORS"));
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  maxAge: 86400 // 24 Stunden Preflight-Cache
 }));
 
 // ===================================================================
@@ -674,6 +758,40 @@ app.get("/health", (req, res) => {
   res.status(200).json(health);
 });
 
+// ===================================================================
+// KUBERNETES-STYLE HEALTH CHECKS (NEW)
+// ===================================================================
+
+// Liveness probe - ist der Server am Leben?
+app.get("/healthz", (req, res) => {
+  res.json({
+    status: "healthy",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    memory: process.memoryUsage()
+  });
+});
+
+// Readiness probe - ist der Server bereit für Traffic?
+app.get("/readyz", async (req, res) => {
+  const checks = {
+    server: true,
+    anthropic_configured: !!process.env.ANTHROPIC_API_KEY,
+    openai_configured: !!process.env.OPENAI_API_KEY,
+    perplexity_configured: !!process.env.PERPLEXITY_API_KEY,
+    gemini_configured: !!process.env.GEMINI_API_KEY
+  };
+
+  // Server is ready if at least Anthropic (required) is configured
+  const isReady = checks.server && checks.anthropic_configured;
+
+  res.status(isReady ? 200 : 503).json({
+    ready: isReady,
+    checks,
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Self Route - API Description
 app.get("/api/self", (req, res) => {
   res.json({
@@ -879,12 +997,18 @@ Analysiere und optimiere diesen Prompt. Gib einen Score (1-10), liste Probleme, 
 
 app.get("/api/prompts", promptLibraryRateLimit, (req, res) => {
   try {
-    const { category, search, featured } = req.query;
+    const { category, search, featured, page, limit, compact } = req.query;
+
+    // Pagination parameters
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(Math.max(1, parseInt(limit) || 20), 100);
+    const offset = (pageNum - 1) * limitNum;
 
     // Cache-Key basierend auf Query-Parametern
-    const cacheKey = `prompts:${category || 'all'}:${search || ''}:${featured || ''}`;
+    const cacheKey = `prompts:${category || 'all'}:${search || ''}:${featured || ''}:${pageNum}:${limitNum}:${compact || ''}`;
     const cached = promptsCache.get(cacheKey);
     if (cached) {
+      setCacheHeaders(res, 300, 600); // 5 Minuten Cache
       return res.json(cached);
     }
 
@@ -917,16 +1041,42 @@ app.get("/api/prompts", promptLibraryRateLimit, (req, res) => {
       return b.uses - a.uses;
     });
 
+    // Total count before pagination
+    const totalCount = filteredPrompts.length;
+
+    // Apply pagination
+    const paginatedPrompts = filteredPrompts.slice(offset, offset + limitNum);
+
+    // Compact mode for mobile (shorter field names, less data)
+    const formattedPrompts = compact === 'true'
+      ? paginatedPrompts.map(p => ({
+          i: p.id,           // id
+          t: p.title,        // title
+          c: p.category,     // category
+          r: p.rating,       // rating
+          f: p.featured      // featured
+        }))
+      : paginatedPrompts;
+
     const response = {
       success: true,
-      count: filteredPrompts.length,
-      prompts: filteredPrompts,
+      count: paginatedPrompts.length,
+      prompts: formattedPrompts,
       categories: ["all", "creative", "business", "technical", "education", "writing", "ai", "communication", "data", "marketing", "productivity", "design", "innovation"],
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: totalCount,
+        pages: Math.ceil(totalCount / limitNum)
+      },
       timestamp: new Date().toISOString(),
     };
 
     // Cache das Ergebnis
     promptsCache.set(cacheKey, response);
+
+    // Set cache headers
+    setCacheHeaders(res, 300, 600); // 5 Minuten Cache
 
     res.json(response);
   } catch (error) {
@@ -1000,6 +1150,9 @@ const sanitizePrompt = (prompt) => {
 const API_TIMEOUT = 60000; // 60 Sekunden Timeout pro Model (empfohlen für KI-APIs)
 
 app.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
+  // No caching for dynamic battle responses
+  setNoCacheHeaders(res);
+
   try {
     const { prompt } = req.body;
 
@@ -1269,6 +1422,9 @@ app.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
 // ===================================================================
 
 app.post("/api/chat", generalRateLimit, async (req, res) => {
+  // No caching for dynamic chat responses
+  setNoCacheHeaders(res);
+
   try {
     const { messages, model = "claude" } = req.body;
 
@@ -1578,9 +1734,15 @@ Bewerte die Antwort und erstelle ein JSON-Objekt:
 
 app.get("/api/news", promptLibraryRateLimit, (req, res) => {
   try {
+    const { page, limit, compact } = req.query;
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(Math.max(1, parseInt(limit) || 6), 20);
+
     // Check cache first
-    const cached = newsCache.get('news');
+    const cacheKey = `news:${pageNum}:${limitNum}:${compact || ''}`;
+    const cached = newsCache.get(cacheKey);
     if (cached) {
+      setCacheHeaders(res, 300, 600);
       return res.json(cached);
     }
 
@@ -1663,19 +1825,44 @@ app.get("/api/news", promptLibraryRateLimit, (req, res) => {
       selectedNews.push(newsDatabase[index]);
     }
 
+    // Pagination offset
+    const offset = (pageNum - 1) * limitNum;
+
+    // Apply pagination
+    const paginatedNews = selectedNews.slice(offset, offset + limitNum);
+
     if (NODE_ENV === "development") {
-      console.log(`📰 Serving ${selectedNews.length} news items (rotation: day ${dayOfYear})`);
+      console.log(`📰 Serving ${paginatedNews.length} news items (rotation: day ${dayOfYear})`);
     }
+
+    // Compact mode for mobile
+    const formattedNews = compact === 'true'
+      ? paginatedNews.map(n => ({
+          t: n.title,        // title
+          d: n.date,         // date
+          u: n.url,          // url
+          s: n.source        // source
+        }))
+      : paginatedNews;
 
     const response = {
       success: true,
-      items: selectedNews,
+      items: formattedNews,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: selectedNews.length,
+        pages: Math.ceil(selectedNews.length / limitNum)
+      },
       lastUpdated: new Date().toISOString(),
       rotationDay: dayOfYear
     };
 
     // Cache das Ergebnis
-    newsCache.set('news', response);
+    newsCache.set(`news:${pageNum}:${limitNum}:${compact || ''}`, response);
+
+    // Set cache headers - news can be cached longer
+    setCacheHeaders(res, 300, 600); // 5 Minuten Cache
 
     res.json(response);
 
@@ -1862,6 +2049,9 @@ app.get("/api/spark/today", (req, res) => {
       console.log(`✨ Serving Spark of the Day: "${todaysSpark.spark.substring(0, 50)}..."`);
     }
 
+    // Cache for 1 hour (spark changes daily)
+    setCacheHeaders(res, 3600, 7200);
+
     res.json({
       success: true,
       ...todaysSpark,
@@ -1891,7 +2081,10 @@ app.use((req, res) => {
     availableRoutes: [
       "GET /",
       "GET /health",
+      "GET /healthz",
+      "GET /readyz",
       "GET /api/self",
+      "POST /api/chat",
       "POST /api/prompt-generator",
       "POST /api/prompt-optimizer",
       "GET /api/prompts",
