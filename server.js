@@ -1,7 +1,7 @@
 // ===================================================================
 // HOHL.ROCKS BACKEND - Node.js/Express Server (OPTIMIZED)
 // Features: Prompt Generator + Optimizer + Library + Model Battle + Daily Challenge + News + Spark
-// Version: 2.7 - Conversation Logging & Security
+// Version: 2.8 - Security Hardening & Dependency Updates
 // ===================================================================
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -379,10 +379,10 @@ const anthropic = new Anthropic({
 
 const MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-4-20250514";
 
-// OpenAI (GPT)
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// OpenAI (GPT) - only initialize if key is available
+const openai = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : null;
 
 // Perplexity (via fetch)
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
@@ -468,6 +468,8 @@ const modelBattleRateLimit = createRateLimiter(10, 60000);    // 10 req/min (HAU
 const promptGeneratorRateLimit = createRateLimiter(20, 60000); // 20 req/min (Prompt Generator/Optimizer)
 const promptLibraryRateLimit = createRateLimiter(60, 60000);   // 60 req/min (Read-only Library)
 const generalRateLimit = createRateLimiter(30, 60000);         // 30 req/min (andere Endpoints)
+const adminRateLimit = createRateLimiter(30, 60000);           // 30 req/min (Admin Endpoints)
+const gdprRateLimit = createRateLimiter(10, 60000);            // 10 req/min (GDPR Endpoints)
 
 // ===================================================================
 // API KEY VALIDATION (NEW)
@@ -907,7 +909,7 @@ async function callClaude(systemPrompt, userPrompt, maxTokens = 1500) {
 // HEALTH CHECK & INFO ROUTES
 // ===================================================================
 
-const API_VERSION = "2.5.1";  // Unified version constant - Gemini 2.0 Flash fix
+const API_VERSION = "2.8.0";  // Synced with package.json
 
 // Main Health Check
 app.get("/", (req, res) => {
@@ -941,6 +943,7 @@ app.get("/health", (req, res) => {
     timestamp: new Date().toISOString(),
     checks: {
       api: "ok",
+      database: dbConnected ? "connected" : "fallback (in-memory)",
       rateLimiting: "active"
     },
     // Environment Info für Debugging
@@ -1084,7 +1087,8 @@ Ausgabeformat (genau so formatieren):
 
 etc.`;
 
-    const userPrompt = `Thema: ${topic.trim()}
+    const cleanTopic = sanitizePrompt(topic.trim());
+    const userPrompt = `Thema: ${cleanTopic}
 
 Generiere 5 verschiedene Prompt-Styles (Executive, Technical, Creative, Tutorial, Expert) für dieses Thema.`;
 
@@ -1164,7 +1168,8 @@ IMPROVED:
 EXPLANATION:
 [Erklärung warum besser]`;
 
-    const userPrompt = `Original Prompt: "${prompt.trim()}"
+    const cleanPrompt = sanitizePrompt(prompt.trim());
+    const userPrompt = `Original Prompt: "${cleanPrompt}"
 
 Analysiere und optimiere diesen Prompt. Gib einen Score (1-10), liste Probleme, erstelle einen verbesserten Prompt und erkläre die Verbesserungen.`;
 
@@ -1447,6 +1452,7 @@ app.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
       (async () => {
         const startTime = Date.now();
         try {
+          if (!openai) throw new Error("OpenAI API key not configured");
           const completion = await withTimeout(
             openai.chat.completions.create({
               model: "gpt-4o-mini",
@@ -1869,7 +1875,7 @@ Sei kreativ! Wechsle zwischen verschiedenen Themen: Content, Strategie, Analyse,
     let challenge;
     try {
       challenge = JSON.parse(responseText);
-    } catch (e) {
+    } catch (_parseErr) {
       const jsonMatch = responseText.match(/```json\n([\s\S]+?)\n```/);
       if (jsonMatch) {
         challenge = JSON.parse(jsonMatch[1]);
@@ -1978,7 +1984,7 @@ Bewerte die Antwort und erstelle ein JSON-Objekt:
     let evaluation;
     try {
       evaluation = JSON.parse(responseText);
-    } catch (e) {
+    } catch (_parseErr) {
       const jsonMatch = responseText.match(/```json\n([\s\S]+?)\n```/);
       if (jsonMatch) {
         evaluation = JSON.parse(jsonMatch[1]);
@@ -2357,7 +2363,7 @@ app.get("/api/spark/today", (req, res) => {
 // ===================================================================
 
 // Get all chat logs (with pagination)
-app.get("/api/admin/chat-logs", adminAuth, async (req, res) => {
+app.get("/api/admin/chat-logs", adminRateLimit, adminAuth, async (req, res) => {
   const page = Math.max(1, parseInt(req.query.page) || 1);
   const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 50), 200);
   const offset = (page - 1) * limit;
@@ -2426,7 +2432,7 @@ app.get("/api/admin/chat-logs", adminAuth, async (req, res) => {
 });
 
 // Get logs for a specific session
-app.get("/api/admin/chat-logs/session/:sessionId", adminAuth, async (req, res) => {
+app.get("/api/admin/chat-logs/session/:sessionId", adminRateLimit, adminAuth, async (req, res) => {
   const { sessionId } = req.params;
 
   try {
@@ -2465,7 +2471,7 @@ app.get("/api/admin/chat-logs/session/:sessionId", adminAuth, async (req, res) =
 });
 
 // Get chat statistics
-app.get("/api/admin/chat-stats", adminAuth, async (req, res) => {
+app.get("/api/admin/chat-stats", adminRateLimit, adminAuth, async (req, res) => {
   try {
     // PostgreSQL
     if (pool && dbConnected) {
@@ -2535,7 +2541,7 @@ app.get("/api/admin/chat-stats", adminAuth, async (req, res) => {
 });
 
 // Flag/unflag a chat log entry
-app.patch("/api/admin/chat-logs/:id/flag", adminAuth, async (req, res) => {
+app.patch("/api/admin/chat-logs/:id/flag", adminRateLimit, adminAuth, async (req, res) => {
   const { id } = req.params;
   const { flagged, reason } = req.body;
 
@@ -2573,8 +2579,20 @@ app.patch("/api/admin/chat-logs/:id/flag", adminAuth, async (req, res) => {
 });
 
 // Export chat logs as CSV
-app.get("/api/admin/chat-logs/export", adminAuth, async (req, res) => {
+app.get("/api/admin/chat-logs/export", adminRateLimit, adminAuth, async (req, res) => {
   const { from, to } = req.query;
+  const MAX_EXPORT_ROWS = 10000;
+
+  // Validate date parameters
+  const fromDate = from ? new Date(from) : null;
+  const toDate = to ? new Date(to) : null;
+
+  if (from && isNaN(fromDate?.getTime())) {
+    return res.status(400).json({ success: false, error: 'Invalid "from" date format' });
+  }
+  if (to && isNaN(toDate?.getTime())) {
+    return res.status(400).json({ success: false, error: 'Invalid "to" date format' });
+  }
 
   try {
     let logs = [];
@@ -2593,18 +2611,21 @@ app.get("/api/admin/chat-logs/export", adminAuth, async (req, res) => {
         FROM chat_logs
         WHERE created_at BETWEEN $1 AND $2
         ORDER BY created_at DESC
-      `, [from || '1970-01-01', to || new Date().toISOString()]);
+        LIMIT $3
+      `, [from || '1970-01-01', to || new Date().toISOString(), MAX_EXPORT_ROWS]);
 
       logs = result.rows;
     } else {
       // In-Memory fallback
-      const fromDate = from ? new Date(from) : new Date(0);
-      const toDate = to ? new Date(to) : new Date();
+      const filterFrom = fromDate || new Date(0);
+      const filterTo = toDate || new Date();
 
-      logs = inMemoryChatLogs.filter(log => {
-        const logDate = new Date(log.created_at);
-        return logDate >= fromDate && logDate <= toDate;
-      });
+      logs = inMemoryChatLogs
+        .filter(log => {
+          const logDate = new Date(log.created_at);
+          return logDate >= filterFrom && logDate <= filterTo;
+        })
+        .slice(0, MAX_EXPORT_ROWS);
     }
 
     // Generate CSV
@@ -2640,7 +2661,7 @@ app.get("/api/admin/chat-logs/export", adminAuth, async (req, res) => {
 // ===================================================================
 
 // Get user's own data (via session cookie)
-app.get("/api/my-data", async (req, res) => {
+app.get("/api/my-data", gdprRateLimit, async (req, res) => {
   const sessionId = req.cookies?.chat_session;
 
   if (!sessionId) {
@@ -2694,7 +2715,7 @@ app.get("/api/my-data", async (req, res) => {
 });
 
 // Delete user's own data (via session cookie)
-app.delete("/api/my-data", async (req, res) => {
+app.delete("/api/my-data", gdprRateLimit, async (req, res) => {
   const sessionId = req.cookies?.chat_session;
 
   if (!sessionId) {
@@ -2718,11 +2739,9 @@ app.delete("/api/my-data", async (req, res) => {
     } else {
       // In-Memory fallback
       const initialLength = inMemoryChatLogs.length;
-      for (let i = inMemoryChatLogs.length - 1; i >= 0; i--) {
-        if (inMemoryChatLogs[i].session_id === sessionId) {
-          inMemoryChatLogs.splice(i, 1);
-        }
-      }
+      const remaining = inMemoryChatLogs.filter(log => log.session_id !== sessionId);
+      inMemoryChatLogs.length = 0;
+      inMemoryChatLogs.push(...remaining);
       deletedCount = initialLength - inMemoryChatLogs.length;
     }
 
@@ -2858,7 +2877,8 @@ const server = app.listen(PORT, () => {
   `);
 
   console.log(`✅ Server ready at http://localhost:${PORT}`);
-  console.log(`🛡️  Rate Limiting: Active (Model Battle: 10/min, Others: 30/min)`);
+  console.log(`🛡️  Rate Limiting: Active (Model Battle: 10/min, Admin: 30/min, GDPR: 10/min, Others: 30/min)`);
+  console.log(`💾 Database: ${dbConnected ? 'PostgreSQL connected' : 'In-memory fallback'}`);
   console.log(`⏰ Started at ${new Date().toISOString()}\n`);
 });
 
@@ -2866,18 +2886,26 @@ const server = app.listen(PORT, () => {
 // GRACEFUL SHUTDOWN
 // ===================================================================
 
-process.on('SIGTERM', () => {
-  console.log('\n⚠️  SIGTERM signal received: closing HTTP server');
-  server.close(() => {
+async function gracefulShutdown(signal) {
+  console.log(`\n⚠️  ${signal} signal received: shutting down gracefully`);
+  server.close(async () => {
     console.log('✅ HTTP server closed');
+    if (pool) {
+      try {
+        await pool.end();
+        console.log('✅ Database pool closed');
+      } catch (err) {
+        console.error('⚠️  Error closing database pool:', err.message);
+      }
+    }
     process.exit(0);
   });
-});
+  // Force shutdown after 10s if graceful shutdown hangs
+  setTimeout(() => {
+    console.error('❌ Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+}
 
-process.on('SIGINT', () => {
-  console.log('\n⚠️  SIGINT signal received: closing HTTP server');
-  server.close(() => {
-    console.log('✅ HTTP server closed');
-    process.exit(0);
-  });
-});
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
