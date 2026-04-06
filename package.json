@@ -7,8 +7,10 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "lint": "eslint server.js",
-    "lint:fix": "eslint --fix server.js"
+    "lint": "eslint server.js src/",
+    "lint:fix": "eslint --fix server.js src/",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "keywords": [
     "ai",
@@ -35,6 +37,7 @@
     "uuid": "^13.0.0"
   },
   "devDependencies": {
-    "eslint": "^10.2.0"
+    "eslint": "^10.2.0",
+    "vitest": "^4.1.2"
   }
 }
