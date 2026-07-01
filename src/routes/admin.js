@@ -8,8 +8,21 @@ import { getPool, isDbConnected, getInMemoryLogs } from "../config/database.js";
 import { adminAuth } from "../middleware/auth.js";
 import { adminRateLimit } from "../middleware/rateLimit.js";
 import { log } from "../utils/logger.js";
+import { sendError } from "../utils/helpers.js";
 
 const router = Router();
+
+// Neutralize CSV/formula injection: spreadsheet apps treat a leading
+// =, +, -, or @ as the start of a formula. User-supplied chat text ends up
+// here verbatim, so a message like `=cmd|'/c calc'!A1` could otherwise
+// execute when an admin opens the export in Excel/Sheets.
+function csvField(value) {
+  let str = String(value ?? '');
+  if (/^[=+\-@]/.test(str)) {
+    str = `'${str}`;
+  }
+  return `"${str.replace(/"/g, '""').replace(/\n/g, ' ')}"`;
+}
 
 // Get all chat logs (with pagination)
 router.get("/api/admin/chat-logs", adminRateLimit, adminAuth, async (req, res) => {
@@ -70,7 +83,7 @@ router.get("/api/admin/chat-logs", adminRateLimit, adminAuth, async (req, res) =
     });
   } catch (error) {
     log.error('Admin chat-logs error:', error.message);
-    res.status(500).json({ success: false, error: 'Failed to fetch chat logs', message: error.message });
+    sendError(res, 500, 'Failed to fetch chat logs', error.message);
   }
 });
 
@@ -96,7 +109,7 @@ router.get("/api/admin/chat-logs/session/:sessionId", adminRateLimit, adminAuth,
     res.json({ success: true, logs: sessionLogs, count: sessionLogs.length });
   } catch (error) {
     log.error('Admin session-logs error:', error.message);
-    res.status(500).json({ success: false, error: 'Failed to fetch session logs', message: error.message });
+    sendError(res, 500, 'Failed to fetch session logs', error.message);
   }
 });
 
@@ -142,7 +155,7 @@ router.get("/api/admin/chat-stats", adminRateLimit, adminAuth, async (req, res) 
     });
   } catch (error) {
     log.error('Admin stats error:', error.message);
-    res.status(500).json({ success: false, error: 'Failed to fetch stats', message: error.message });
+    sendError(res, 500, 'Failed to fetch stats', error.message);
   }
 });
 
@@ -160,7 +173,7 @@ router.patch("/api/admin/chat-logs/:id/flag", adminRateLimit, adminAuth, async (
       );
 
       if (result.rows.length === 0) {
-        return res.status(404).json({ success: false, error: 'Chat log not found' });
+        return sendError(res, 404, 'Chat log not found');
       }
 
       return res.json({ success: true, log: result.rows[0] });
@@ -170,7 +183,7 @@ router.patch("/api/admin/chat-logs/:id/flag", adminRateLimit, adminAuth, async (
     const logs = getInMemoryLogs();
     const logEntry = logs.find(l => l.id === id);
     if (!logEntry) {
-      return res.status(404).json({ success: false, error: 'Chat log not found' });
+      return sendError(res, 404, 'Chat log not found');
     }
 
     logEntry.flagged = !!flagged;
@@ -178,7 +191,7 @@ router.patch("/api/admin/chat-logs/:id/flag", adminRateLimit, adminAuth, async (
     res.json({ success: true, log: logEntry });
   } catch (error) {
     log.error('Admin flag error:', error.message);
-    res.status(500).json({ success: false, error: 'Failed to update flag', message: error.message });
+    sendError(res, 500, 'Failed to update flag', error.message);
   }
 });
 
@@ -191,10 +204,10 @@ router.get("/api/admin/chat-logs/export", adminRateLimit, adminAuth, async (req,
   const toDate = to ? new Date(to) : null;
 
   if (from && isNaN(fromDate?.getTime())) {
-    return res.status(400).json({ success: false, error: 'Invalid "from" date format' });
+    return sendError(res, 400, 'Invalid "from" date format');
   }
   if (to && isNaN(toDate?.getTime())) {
-    return res.status(400).json({ success: false, error: 'Invalid "to" date format' });
+    return sendError(res, 400, 'Invalid "to" date format');
   }
 
   try {
@@ -227,10 +240,10 @@ router.get("/api/admin/chat-logs/export", adminRateLimit, adminAuth, async (req,
       ...logs.map(row => [
         row.created_at,
         row.session_id,
-        `"${(row.user_message || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
-        `"${(row.ai_response || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
+        csvField(row.user_message || ''),
+        csvField(row.ai_response || ''),
         row.flagged ? 'Ja' : 'Nein',
-        row.flag_reason || '',
+        csvField(row.flag_reason || ''),
         row.response_time_ms
       ].join(';'))
     ].join('\n');
@@ -240,7 +253,7 @@ router.get("/api/admin/chat-logs/export", adminRateLimit, adminAuth, async (req,
     res.send('\uFEFF' + csv);
   } catch (error) {
     log.error('Admin export error:', error.message);
-    res.status(500).json({ success: false, error: 'Failed to export chat logs', message: error.message });
+    sendError(res, 500, 'Failed to export chat logs', error.message);
   }
 });
 

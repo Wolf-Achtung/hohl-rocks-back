@@ -6,6 +6,7 @@ import { Router } from "express";
 import { getPool, isDbConnected, getInMemoryLogs } from "../config/database.js";
 import { gdprRateLimit } from "../middleware/rateLimit.js";
 import { log } from "../utils/logger.js";
+import { sendError } from "../utils/helpers.js";
 
 const router = Router();
 
@@ -14,11 +15,7 @@ router.get("/api/my-data", gdprRateLimit, async (req, res) => {
   const sessionId = req.cookies?.chat_session;
 
   if (!sessionId) {
-    return res.status(400).json({
-      success: false,
-      error: 'Keine Session gefunden',
-      message: 'Du hast keine aktive Chat-Session.'
-    });
+    return sendError(res, 400, 'Keine Session gefunden', 'Du hast keine aktive Chat-Session.');
   }
 
   try {
@@ -39,7 +36,7 @@ router.get("/api/my-data", gdprRateLimit, async (req, res) => {
     res.json({ success: true, sessionId, conversations: sessionLogs, count: sessionLogs.length });
   } catch (error) {
     log.error('My-data error:', error.message);
-    res.status(500).json({ success: false, error: 'Daten konnten nicht abgerufen werden', message: error.message });
+    sendError(res, 500, 'Daten konnten nicht abgerufen werden', error.message);
   }
 });
 
@@ -48,11 +45,7 @@ router.delete("/api/my-data", gdprRateLimit, async (req, res) => {
   const sessionId = req.cookies?.chat_session;
 
   if (!sessionId) {
-    return res.status(400).json({
-      success: false,
-      error: 'Keine Session gefunden',
-      message: 'Du hast keine aktive Chat-Session.'
-    });
+    return sendError(res, 400, 'Keine Session gefunden', 'Du hast keine aktive Chat-Session.');
   }
 
   try {
@@ -75,7 +68,7 @@ router.delete("/api/my-data", gdprRateLimit, async (req, res) => {
     res.json({ success: true, message: 'Alle deine Chat-Daten wurden gelöscht.', deletedCount });
   } catch (error) {
     log.error('Delete my-data error:', error.message);
-    res.status(500).json({ success: false, error: 'Daten konnten nicht gelöscht werden', message: error.message });
+    sendError(res, 500, 'Daten konnten nicht gelöscht werden', error.message);
   }
 });
 

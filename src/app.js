@@ -62,17 +62,17 @@ if (process.env.ALLOWED_ORIGINS) {
   });
 }
 
+// NOTE: previously this also allowed any *.netlify.app / *.railway.app origin
+// (for "preview deployments"). Combined with credentials:true, that let any
+// third party who spins up a free Netlify/Railway app make credentialed
+// cross-origin requests carrying the chat_session cookie. Preview deployment
+// URLs should instead be added explicitly via the ALLOWED_ORIGINS env var.
 app.use(cors({
   origin: function (origin, callback) {
     // Allow requests with no origin (mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
 
     if (ALLOWED_ORIGINS.includes(origin)) {
-      return callback(null, true);
-    }
-
-    // Allow Netlify/Railway preview deployments
-    if (/\.netlify\.app$/.test(origin) || /\.railway\.app$/.test(origin)) {
       return callback(null, true);
     }
 

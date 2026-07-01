@@ -52,21 +52,14 @@ export function getSessionId(req, res) {
   return sessionId;
 }
 
-// Standardized response helpers
-export function sendSuccess(res, data, meta = {}) {
-  res.json({
-    success: true,
-    data,
-    meta: {
-      timestamp: new Date().toISOString(),
-      ...meta
-    }
-  });
-}
-
-export function sendError(res, status, message, code = 'ERROR') {
+// Standardized error response - matches the shape most routes already use
+// ({success, error, message, timestamp}), so every route now sends it
+// consistently instead of some omitting `success`/`timestamp`.
+export function sendError(res, status, error, message) {
   res.status(status).json({
     success: false,
-    error: { code, message }
+    error,
+    message,
+    timestamp: new Date().toISOString()
   });
 }

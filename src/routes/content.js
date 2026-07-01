@@ -5,7 +5,7 @@
 import { Router } from "express";
 import { promptLibraryRateLimit } from "../middleware/rateLimit.js";
 import { callClaude } from "../services/ai-clients.js";
-import { setCacheHeaders } from "../utils/helpers.js";
+import { setCacheHeaders, sendError } from "../utils/helpers.js";
 import { createCache } from "../utils/cache.js";
 import { NEWS_DATABASE, SPARKS_DATABASE } from "../data/prompts.js";
 import { log } from "../utils/logger.js";
@@ -98,10 +98,7 @@ Sei kreativ! Wechsle zwischen verschiedenen Themen: Content, Strategie, Analyse,
 
   } catch (error) {
     log.error("Error generating daily challenge:", error.message);
-    res.status(500).json({
-      error: "Failed to generate daily challenge",
-      message: error.message
-    });
+    sendError(res, 500, "Failed to generate daily challenge", error.message);
   }
 });
 
@@ -111,21 +108,15 @@ router.post("/api/submit-challenge", async (req, res) => {
     const { difficulty, task, answer } = req.body;
 
     if (!difficulty || !task || !answer) {
-      return res.status(400).json({
-        error: "Missing required fields: difficulty, task, answer"
-      });
+      return sendError(res, 400, "Missing required fields", "difficulty, task, and answer are all required");
     }
 
     if (answer.trim().length < 20) {
-      return res.status(400).json({
-        error: "Answer too short (minimum 20 characters)"
-      });
+      return sendError(res, 400, "Answer too short", "Minimum 20 characters");
     }
 
     if (answer.length > 5000) {
-      return res.status(400).json({
-        error: "Answer too long (maximum 5000 characters)"
-      });
+      return sendError(res, 400, "Answer too long", "Maximum 5000 characters");
     }
 
     log.debug(`Evaluating ${difficulty} challenge submission...`);
@@ -190,10 +181,7 @@ Bewerte die Antwort und erstelle ein JSON-Objekt:
 
   } catch (error) {
     log.error("Error evaluating challenge:", error.message);
-    res.status(500).json({
-      error: "Failed to evaluate challenge",
-      message: error.message
-    });
+    sendError(res, 500, "Failed to evaluate challenge", error.message);
   }
 });
 
@@ -213,15 +201,15 @@ router.get("/api/news", promptLibraryRateLimit, (req, res) => {
 
     const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
 
+    // Rotate the full list so "today" starts at a different offset, then
+    // paginate across the whole rotated list. Previously this built a
+    // fixed 6-item window regardless of `limit`/`page`, so `limit` values
+    // above 6 were silently ignored and page 2+ always came back empty.
     const startIndex = dayOfYear % NEWS_DATABASE.length;
-    const selectedNews = [];
-    for (let i = 0; i < 6; i++) {
-      const index = (startIndex + i) % NEWS_DATABASE.length;
-      selectedNews.push(NEWS_DATABASE[index]);
-    }
+    const rotatedNews = NEWS_DATABASE.map((_, i) => NEWS_DATABASE[(startIndex + i) % NEWS_DATABASE.length]);
 
     const offset = (pageNum - 1) * limitNum;
-    const paginatedNews = selectedNews.slice(offset, offset + limitNum);
+    const paginatedNews = rotatedNews.slice(offset, offset + limitNum);
 
     log.debug(`Serving ${paginatedNews.length} news items (rotation: day ${dayOfYear})`);
 
@@ -235,8 +223,8 @@ router.get("/api/news", promptLibraryRateLimit, (req, res) => {
       pagination: {
         page: pageNum,
         limit: limitNum,
-        total: selectedNews.length,
-        pages: Math.ceil(selectedNews.length / limitNum)
+        total: rotatedNews.length,
+        pages: Math.ceil(rotatedNews.length / limitNum)
       },
       lastUpdated: new Date().toISOString(),
       rotationDay: dayOfYear
@@ -248,10 +236,7 @@ router.get("/api/news", promptLibraryRateLimit, (req, res) => {
 
   } catch (error) {
     log.error("Error fetching news:", error.message);
-    res.status(500).json({
-      error: "Failed to fetch news",
-      message: error.message
-    });
+    sendError(res, 500, "Failed to fetch news", error.message);
   }
 });
 
@@ -277,10 +262,7 @@ router.get("/api/spark/today", (req, res) => {
     });
   } catch (error) {
     log.error("Error fetching spark:", error.message);
-    res.status(500).json({
-      error: "Failed to fetch spark of the day",
-      message: error.message
-    });
+    sendError(res, 500, "Failed to fetch spark of the day", error.message);
   }
 });
 

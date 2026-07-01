@@ -4,7 +4,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import { MODEL, PERPLEXITY_API_KEY, GEMINI_API_KEY, API_TIMEOUT } from "../config/env.js";
+import { MODEL, OPENAI_MODEL, PERPLEXITY_MODEL, GEMINI_MODEL, PERPLEXITY_API_KEY, GEMINI_API_KEY, API_TIMEOUT } from "../config/env.js";
 import { log } from "../utils/logger.js";
 import { withTimeout } from "../utils/helpers.js";
 
@@ -88,7 +88,7 @@ async function callGPTForBattle(cleanPrompt) {
 
   const completion = await withTimeout(
     openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: OPENAI_MODEL,
       max_tokens: 1024,
       messages: [{ role: "user", content: cleanPrompt }]
     }),
@@ -113,7 +113,7 @@ async function callPerplexityForBattle(cleanPrompt) {
         "Authorization": `Bearer ${PERPLEXITY_API_KEY}`
       },
       body: JSON.stringify({
-        model: "sonar-pro",
+        model: PERPLEXITY_MODEL,
         max_tokens: 1024,
         messages: [{ role: "user", content: cleanPrompt }]
       }),
@@ -140,7 +140,7 @@ async function callGeminiForBattle(cleanPrompt) {
 
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -171,10 +171,10 @@ async function callGeminiForBattle(cleanPrompt) {
 
 // Model registry with metadata
 const BATTLE_MODELS = [
-  { id: "claude", name: "Claude Sonnet 4", callFn: callClaudeForBattle },
-  { id: "gpt", name: "GPT-4o Mini", callFn: callGPTForBattle },
+  { id: "claude", name: "Claude Sonnet 5", callFn: callClaudeForBattle },
+  { id: "gpt", name: "GPT-5 Mini", callFn: callGPTForBattle },
   { id: "perplexity", name: "Perplexity Sonar Pro", callFn: callPerplexityForBattle },
-  { id: "gemini", name: "Gemini 2.0 Flash", callFn: callGeminiForBattle },
+  { id: "gemini", name: "Gemini 3.5 Flash", callFn: callGeminiForBattle },
 ];
 
 export async function runModelBattle(cleanPrompt) {
