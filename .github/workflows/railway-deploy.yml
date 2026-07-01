@@ -1,0 +1,31 @@
+name: Deploy to Railway
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN secret is not set (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+          if [ -n "${{ vars.RAILWAY_SERVICE }}" ]; then
+            railway up --service "${{ vars.RAILWAY_SERVICE }}" --detach
+          else
+            railway up --detach
+          fi
