@@ -7,10 +7,15 @@ import { logConversation } from "../config/database.js";
 import { generalRateLimit } from "../middleware/rateLimit.js";
 import { chatWithClaude } from "../services/ai-clients.js";
 import { moderateContent } from "../services/moderation.js";
-import { sanitizePrompt, setNoCacheHeaders, getSessionId } from "../utils/helpers.js";
+import { sanitizePrompt, setNoCacheHeaders, getSessionId, sendError } from "../utils/helpers.js";
 import { log } from "../utils/logger.js";
 
 const router = Router();
+
+// This endpoint only ever calls Claude; "model" is accepted for forward
+// compatibility but must not be persisted unvalidated (it's logged to the
+// database as-is otherwise).
+const SUPPORTED_MODELS = ["claude"];
 
 router.post("/api/chat", generalRateLimit, async (req, res) => {
   setNoCacheHeaders(res);
@@ -19,31 +24,23 @@ router.post("/api/chat", generalRateLimit, async (req, res) => {
   const sessionId = getSessionId(req, res);
 
   try {
-    const { messages, model = "claude" } = req.body;
+    const { messages, model: requestedModel } = req.body;
+    const model = SUPPORTED_MODELS.includes(requestedModel) ? requestedModel : "claude";
 
     // Validate messages array
     if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({
-        error: "Messages array required",
-        message: "Please provide a messages array with role and content"
-      });
+      return sendError(res, 400, "Messages array required", "Please provide a messages array with role and content");
     }
 
     if (messages.length === 0) {
-      return res.status(400).json({
-        error: "Empty messages array",
-        message: "Please provide at least one message"
-      });
+      return sendError(res, 400, "Empty messages array", "Please provide at least one message");
     }
 
     const systemMessage = messages.find(m => m.role === "system")?.content || "";
     const userMessages = messages.filter(m => m.role === "user" || m.role === "assistant");
 
     if (userMessages.length === 0) {
-      return res.status(400).json({
-        error: "No user message found",
-        message: "Please provide at least one user message"
-      });
+      return sendError(res, 400, "No user message found", "Please provide at least one user message");
     }
 
     const lastUserMessage = userMessages.filter(m => m.role === "user").pop()?.content || "";
@@ -51,10 +48,7 @@ router.post("/api/chat", generalRateLimit, async (req, res) => {
     // Validate total length
     const totalLength = userMessages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
     if (totalLength > 4000) {
-      return res.status(400).json({
-        error: "Messages too long",
-        message: "Total message content exceeds 4000 characters"
-      });
+      return sendError(res, 400, "Messages too long", "Total message content exceeds 4000 characters");
     }
 
     // Content moderation
@@ -132,12 +126,7 @@ router.post("/api/chat", generalRateLimit, async (req, res) => {
     });
 
     log.error("Chat error:", error.message);
-    res.status(500).json({
-      success: false,
-      error: "Chat failed",
-      message: error.message.includes("timeout") ? "Zeitüberschreitung" : "Service vorübergehend nicht verfügbar",
-      timestamp: new Date().toISOString()
-    });
+    sendError(res, 500, "Chat failed", error.message.includes("timeout") ? "Zeitüberschreitung" : "Service vorübergehend nicht verfügbar");
   }
 });
 

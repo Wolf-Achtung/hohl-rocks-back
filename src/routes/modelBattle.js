@@ -6,7 +6,7 @@ import { Router } from "express";
 import { NODE_ENV } from "../config/env.js";
 import { modelBattleRateLimit } from "../middleware/rateLimit.js";
 import { runModelBattle } from "../services/ai-clients.js";
-import { sanitizePrompt, setNoCacheHeaders } from "../utils/helpers.js";
+import { sanitizePrompt, setNoCacheHeaders, sendError } from "../utils/helpers.js";
 import { log } from "../utils/logger.js";
 
 const router = Router();
@@ -18,27 +18,23 @@ router.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
     const { prompt } = req.body;
 
     if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
-      return res.status(400).json({
-        error: "Prompt is required",
-        message: "Please provide a non-empty prompt string"
-      });
+      return sendError(res, 400, "Prompt is required", "Please provide a non-empty prompt string");
     }
 
     if (prompt.length > 2000) {
       return res.status(400).json({
+        success: false,
         error: "Prompt too long",
         message: "Maximum prompt length is 2000 characters",
-        currentLength: prompt.length
+        currentLength: prompt.length,
+        timestamp: new Date().toISOString()
       });
     }
 
     const cleanPrompt = sanitizePrompt(prompt);
 
     if (cleanPrompt.length < 3) {
-      return res.status(400).json({
-        error: "Invalid prompt",
-        message: "Prompt must contain meaningful content"
-      });
+      return sendError(res, 400, "Invalid prompt", "Prompt must contain meaningful content");
     }
 
     log.debug(`Model Battle: "${cleanPrompt.slice(0, 50)}..." (${cleanPrompt.length} chars)`);
@@ -68,12 +64,7 @@ router.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
 
   } catch (error) {
     log.error("Model Battle error:", error.message);
-    res.status(500).json({
-      success: false,
-      error: "Internal server error",
-      message: NODE_ENV === "development" ? error.message : "Ein Fehler ist aufgetreten",
-      timestamp: new Date().toISOString()
-    });
+    sendError(res, 500, "Internal server error", NODE_ENV === "development" ? error.message : "Ein Fehler ist aufgetreten");
   }
 });
 

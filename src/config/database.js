@@ -3,7 +3,7 @@
 // ===================================================================
 
 import pg from "pg";
-import { NODE_ENV, MAX_MEMORY_LOGS } from "./env.js";
+import { NODE_ENV, MAX_MEMORY_LOGS, DB_SSL_REJECT_UNAUTHORIZED } from "./env.js";
 import { log } from "../utils/logger.js";
 
 let pool = null;
@@ -16,7 +16,7 @@ if (process.env.DATABASE_URL) {
   try {
     pool = new pg.Pool({
       connectionString: process.env.DATABASE_URL,
-      ssl: NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+      ssl: NODE_ENV === 'production' ? { rejectUnauthorized: DB_SSL_REJECT_UNAUTHORIZED } : false,
       max: 10,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000

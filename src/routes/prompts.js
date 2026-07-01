@@ -5,7 +5,7 @@
 import { Router } from "express";
 import { promptGeneratorRateLimit, promptLibraryRateLimit } from "../middleware/rateLimit.js";
 import { callClaude } from "../services/ai-clients.js";
-import { sanitizePrompt, setCacheHeaders } from "../utils/helpers.js";
+import { sanitizePrompt, setCacheHeaders, sendError } from "../utils/helpers.js";
 import { createCache } from "../utils/cache.js";
 import { FEATURED_PROMPTS } from "../data/prompts.js";
 
@@ -18,17 +18,11 @@ router.post("/api/prompt-generator", promptGeneratorRateLimit, async (req, res) 
     const { topic } = req.body;
 
     if (!topic || typeof topic !== "string" || topic.trim().length === 0) {
-      return res.status(400).json({
-        error: "Invalid input",
-        message: "Topic is required and must be a non-empty string",
-      });
+      return sendError(res, 400, "Invalid input", "Topic is required and must be a non-empty string");
     }
 
     if (topic.length > 500) {
-      return res.status(400).json({
-        error: "Invalid input",
-        message: "Topic too long (max 500 characters)",
-      });
+      return sendError(res, 400, "Invalid input", "Topic too long (max 500 characters)");
     }
 
     const cleanTopic = sanitizePrompt(topic.trim());
@@ -87,10 +81,7 @@ Generiere 5 verschiedene Prompt-Styles (Executive, Technical, Creative, Tutorial
     });
   } catch (error) {
     console.error("Error in prompt-generator:", error);
-    res.status(500).json({
-      error: "Generation failed",
-      message: error.message,
-    });
+    sendError(res, 500, "Generation failed", error.message);
   }
 });
 
@@ -100,17 +91,11 @@ router.post("/api/prompt-optimizer", promptGeneratorRateLimit, async (req, res) 
     const { prompt } = req.body;
 
     if (!prompt || typeof prompt !== "string" || prompt.trim().length === 0) {
-      return res.status(400).json({
-        error: "Invalid input",
-        message: "Prompt is required and must be a non-empty string",
-      });
+      return sendError(res, 400, "Invalid input", "Prompt is required and must be a non-empty string");
     }
 
     if (prompt.length > 1000) {
-      return res.status(400).json({
-        error: "Invalid input",
-        message: "Prompt too long (max 1000 characters)",
-      });
+      return sendError(res, 400, "Invalid input", "Prompt too long (max 1000 characters)");
     }
 
     const cleanPrompt = sanitizePrompt(prompt.trim());
@@ -164,10 +149,7 @@ Analysiere und optimiere diesen Prompt. Gib einen Score (1-10), liste Probleme, 
     });
   } catch (error) {
     console.error("Error in prompt-optimizer:", error);
-    res.status(500).json({
-      error: "Optimization failed",
-      message: error.message,
-    });
+    sendError(res, 500, "Optimization failed", error.message);
   }
 });
 
@@ -237,10 +219,7 @@ router.get("/api/prompts", promptLibraryRateLimit, (req, res) => {
 
   } catch (error) {
     console.error("Error fetching prompts:", error);
-    res.status(500).json({
-      error: "Failed to fetch prompts",
-      message: error.message,
-    });
+    sendError(res, 500, "Failed to fetch prompts", error.message);
   }
 });
 
@@ -250,29 +229,20 @@ router.get("/api/prompts/:id", promptLibraryRateLimit, (req, res) => {
     const promptId = parseInt(req.params.id);
 
     if (isNaN(promptId)) {
-      return res.status(400).json({
-        error: "Invalid ID",
-        message: "Prompt ID must be a number"
-      });
+      return sendError(res, 400, "Invalid ID", "Prompt ID must be a number");
     }
 
     const prompt = FEATURED_PROMPTS.find(p => p.id === promptId);
 
     if (!prompt) {
-      return res.status(404).json({
-        error: "Not found",
-        message: `Prompt with ID ${promptId} not found`
-      });
+      return sendError(res, 404, "Not found", `Prompt with ID ${promptId} not found`);
     }
 
     setCacheHeaders(res, 600, 1200);
-    res.json({ success: true, prompt });
+    res.json({ success: true, prompt, timestamp: new Date().toISOString() });
   } catch (error) {
     console.error("Error fetching prompt:", error);
-    res.status(500).json({
-      error: "Failed to fetch prompt",
-      message: error.message,
-    });
+    sendError(res, 500, "Failed to fetch prompt", error.message);
   }
 });
 
