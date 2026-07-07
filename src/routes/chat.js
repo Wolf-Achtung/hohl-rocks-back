@@ -3,6 +3,7 @@
 // ===================================================================
 
 import { Router } from "express";
+import { CHAT_SYSTEM_PROMPT } from "../config/chatPrompt.js";
 import { logConversation } from "../config/database.js";
 import { generalRateLimit } from "../middleware/rateLimit.js";
 import { chatWithClaude } from "../services/ai-clients.js";
@@ -36,8 +37,16 @@ router.post("/api/chat", generalRateLimit, async (req, res) => {
       return sendError(res, 400, "Empty messages array", "Please provide at least one message");
     }
 
-    const systemMessage = messages.find(m => m.role === "system")?.content || "";
-    const userMessages = messages.filter(m => m.role === "user" || m.role === "assistant");
+    // The system prompt is enforced server-side (see config/chatPrompt.js).
+    // Client-supplied "system" messages are dropped - otherwise this endpoint
+    // is an open Claude proxy with a freely choosable persona.
+    const userMessages = messages.filter(m => m?.role === "user" || m?.role === "assistant");
+
+    // Reject malformed message objects before they reach sanitizePrompt/Claude
+    // (a non-string content would throw a TypeError -> generic 500).
+    if (userMessages.some(m => typeof m.content !== "string")) {
+      return sendError(res, 400, "Invalid message format", "Each message needs a string content field");
+    }
 
     if (userMessages.length === 0) {
       return sendError(res, 400, "No user message found", "Please provide at least one user message");
@@ -81,10 +90,10 @@ router.post("/api/chat", generalRateLimit, async (req, res) => {
     log.debug(`Chat request (model: ${model})`);
 
     const aiResponse = await chatWithClaude({
-      systemMessage,
+      systemMessage: CHAT_SYSTEM_PROMPT,
       userMessages: userMessages.map(m => ({
         role: m.role,
-        content: sanitizePrompt(m.content || "")
+        content: sanitizePrompt(m.content)
       }))
     });
 

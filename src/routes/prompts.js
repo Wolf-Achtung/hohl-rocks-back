@@ -3,6 +3,7 @@
 // ===================================================================
 
 import { Router } from "express";
+import { NODE_ENV } from "../config/env.js";
 import { promptGeneratorRateLimit, promptLibraryRateLimit } from "../middleware/rateLimit.js";
 import { callClaude } from "../services/ai-clients.js";
 import { sanitizePrompt, setCacheHeaders, sendError } from "../utils/helpers.js";
@@ -81,7 +82,7 @@ Generiere 5 verschiedene Prompt-Styles (Executive, Technical, Creative, Tutorial
     });
   } catch (error) {
     console.error("Error in prompt-generator:", error);
-    sendError(res, 500, "Generation failed", error.message);
+    sendError(res, 500, "Generation failed", NODE_ENV === "development" ? error.message : "Ein Fehler ist aufgetreten");
   }
 });
 
@@ -149,7 +150,7 @@ Analysiere und optimiere diesen Prompt. Gib einen Score (1-10), liste Probleme, 
     });
   } catch (error) {
     console.error("Error in prompt-optimizer:", error);
-    sendError(res, 500, "Optimization failed", error.message);
+    sendError(res, 500, "Optimization failed", NODE_ENV === "development" ? error.message : "Ein Fehler ist aufgetreten");
   }
 });
 

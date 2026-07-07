@@ -77,3 +77,20 @@ async function gracefulShutdown(signal) {
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// ===================================================================
+// PROCESS-LEVEL ERROR HANDLERS
+// ===================================================================
+// Railway restarts the process on failure (restartPolicyType ON_FAILURE),
+// but without these handlers a crash outside the Express stack dies
+// without a structured log entry, making diagnosis impossible.
+
+process.on('unhandledRejection', (reason) => {
+  log.error('Unhandled promise rejection:', reason instanceof Error ? (reason.stack || reason.message) : String(reason));
+});
+
+process.on('uncaughtException', (error) => {
+  log.error('Uncaught exception, shutting down:', error.stack || error.message);
+  // State is undefined after an uncaught exception - exit and let Railway restart
+  process.exit(1);
+});

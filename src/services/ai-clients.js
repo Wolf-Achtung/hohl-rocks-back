@@ -18,18 +18,45 @@ const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
+// Extract the text block from a Claude response. Models like claude-sonnet-5
+// run adaptive thinking by default when no `thinking` param is set, so the
+// first content block can be a thinking block - content[0].text would then be
+// undefined. Refusals arrive as HTTP 200 with an empty content array.
+function extractClaudeText(message) {
+  if (message.stop_reason === "refusal") {
+    throw new Error("Claude refused the request");
+  }
+  const text = message.content?.find((block) => block.type === "text")?.text;
+  if (!text) {
+    throw new Error(`Empty Claude response (stop_reason: ${message.stop_reason})`);
+  }
+  return text;
+}
+
+// These are short-form content tasks that don't benefit from extended
+// thinking; disabling it keeps latency/cost down and leaves the full
+// max_tokens budget for the visible answer. Note: models that force
+// thinking on (e.g. claude-fable-5) reject an explicit "disabled" -
+// remove this if CLAUDE_MODEL is ever pointed at such a model.
+const THINKING_DISABLED = { type: "disabled" };
+
 // Call Claude helper
 export async function callClaude(systemPrompt, userPrompt, maxTokens = 1024) {
   if (!anthropic) throw new Error("Anthropic API key not configured");
 
-  const message = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: maxTokens,
-    system: systemPrompt,
-    messages: [{ role: "user", content: userPrompt }]
-  });
+  const message = await withTimeout(
+    anthropic.messages.create({
+      model: MODEL,
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      thinking: THINKING_DISABLED,
+      messages: [{ role: "user", content: userPrompt }]
+    }),
+    API_TIMEOUT,
+    "Claude"
+  );
 
-  return message.content[0].text;
+  return extractClaudeText(message);
 }
 
 // Validate API keys at startup
@@ -74,13 +101,14 @@ async function callClaudeForBattle(cleanPrompt) {
     anthropic.messages.create({
       model: MODEL,
       max_tokens: 1024,
+      thinking: THINKING_DISABLED,
       messages: [{ role: "user", content: cleanPrompt }]
     }),
     API_TIMEOUT,
     "Claude"
   );
 
-  return message.content[0].text;
+  return extractClaudeText(message);
 }
 
 async function callGPTForBattle(cleanPrompt) {
@@ -89,7 +117,9 @@ async function callGPTForBattle(cleanPrompt) {
   const completion = await withTimeout(
     openai.chat.completions.create({
       model: OPENAI_MODEL,
-      max_tokens: 1024,
+      // GPT-5-family (and o-series) models reject `max_tokens` with a 400;
+      // `max_completion_tokens` is the accepted parameter.
+      max_completion_tokens: 1024,
       messages: [{ role: "user", content: cleanPrompt }]
     }),
     API_TIMEOUT,
@@ -140,10 +170,15 @@ async function callGeminiForBattle(cleanPrompt) {
 
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+      // Key goes in a header, not the URL - query strings end up in proxy
+      // logs and error messages.
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": GEMINI_API_KEY
+        },
         body: JSON.stringify({
           contents: [{ parts: [{ text: cleanPrompt }] }],
           generationConfig: {
@@ -233,11 +268,12 @@ export async function chatWithClaude({ systemMessage, userMessages, maxTokens = 
       model: MODEL,
       max_tokens: maxTokens,
       system: systemMessage || undefined,
+      thinking: THINKING_DISABLED,
       messages: userMessages
     }),
     API_TIMEOUT,
     "Claude Chat"
   );
 
-  return response.content[0].text;
+  return extractClaudeText(response);
 }

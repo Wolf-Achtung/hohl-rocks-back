@@ -2,7 +2,9 @@
 nixPkgs = ["nodejs_20"]
 
 [phases.install]
-cmds = ["npm install"]
+# npm ci installs exactly what package-lock.json pins - reproducible builds
+# instead of pulling whatever the semver ranges resolve to at deploy time.
+cmds = ["npm ci --omit=dev"]
 
 [phases.build]
 cmds = []
@@ -10,8 +12,5 @@ cmds = []
 [start]
 cmd = "npm start"
 
-[health-check]
-path = "/health"
-timeout = 30
-interval = 10
-retries = 3
+# NOTE: nixpacks has no [health-check] section - the deploy healthcheck is
+# configured in railway.json (deploy.healthcheckPath).
