@@ -31,7 +31,7 @@ if (process.env.DATABASE_URL) {
       .then(() => {
         dbConnected = true;
         log.info('PostgreSQL connected');
-        initDatabase();
+        initDatabase().then(() => startRetentionJob());
       })
       .catch(err => {
         log.warn('PostgreSQL connection failed, using in-memory fallback', err.message);
@@ -70,6 +70,37 @@ async function initDatabase() {
   } catch (error) {
     log.error('Failed to initialize database tables', error.message);
   }
+}
+
+// ===================================================================
+// GDPR RETENTION
+// ===================================================================
+// chat_logs store user messages, IP and user agent. The session cookie
+// expires after 24h, after which the /api/my-data self-service can no
+// longer reach those rows - so old logs must be deleted automatically.
+
+const RETENTION_DAYS = Math.max(1, parseInt(process.env.CHAT_LOG_RETENTION_DAYS, 10) || 90);
+
+async function deleteExpiredLogs() {
+  if (!pool || !dbConnected) return;
+  try {
+    const result = await pool.query(
+      'DELETE FROM chat_logs WHERE created_at < NOW() - make_interval(days => $1)',
+      [RETENTION_DAYS]
+    );
+    if (result.rowCount > 0) {
+      log.info(`Retention job: deleted ${result.rowCount} chat logs older than ${RETENTION_DAYS} days`);
+    }
+  } catch (error) {
+    log.error('Retention job failed', error.message);
+  }
+}
+
+function startRetentionJob() {
+  deleteExpiredLogs();
+  // unref() so the interval never keeps a shutting-down process alive
+  setInterval(deleteExpiredLogs, 24 * 60 * 60 * 1000).unref();
+  log.info(`Chat log retention active: ${RETENTION_DAYS} days`);
 }
 
 export function isDbConnected() {

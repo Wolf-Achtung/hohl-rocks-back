@@ -23,6 +23,11 @@ import { notFoundHandler, globalErrorHandler } from "./middleware/errorHandler.j
 
 const app = express();
 
+// Railway terminates TLS and proxies exactly one hop in front of the app.
+// Without this, req.ip is always the proxy's IP, so all users would share
+// the same rate-limit buckets and chat-log IPs would be meaningless.
+app.set("trust proxy", 1);
+
 // ===================================================================
 // REQUEST LOGGING
 // ===================================================================
@@ -43,7 +48,9 @@ app.use((req, res, next) => {
 // ===================================================================
 
 app.use(compression({ level: 6, threshold: 1024 }));
-app.use(express.json({ limit: "10mb" }));
+// Largest accepted payload is a chat history capped at 4000 chars, so a
+// tight body limit closes an otherwise pointless parsing-DoS vector.
+app.use(express.json({ limit: "100kb" }));
 app.use(cookieParser());
 
 // CORS
