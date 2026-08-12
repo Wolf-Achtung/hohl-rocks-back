@@ -16,12 +16,23 @@ let inflight = null;
 const berlinDay = () =>
   new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Berlin" }).format(new Date());
 
+// Deliberately 2-5 instead of a fixed count: a fixed "give me 4" made the
+// model pad thin days with meta lines like "keine weiteren Meldungen
+// verifizierbar" - which then rendered as fake headlines on the site.
 const NEWS_PROMPT =
-  "Was sind heute die 4 wichtigsten Nachrichten aus der Welt der KI " +
-  "(neue Modelle, Regulierung, Forschung, bedeutende Produkte)? " +
+  "Suche die wichtigsten KI-Nachrichten der letzten 24 Stunden " +
+  "(neue Modelle, Regulierung, Forschung, bedeutende Produkte). " +
+  "Gib zwischen 2 und 5 Meldungen aus - aber NUR echte, belegbare Meldungen " +
+  "mit konkreter Artikel-URL. Findest du nur zwei, gib nur zwei aus. " +
+  "Erfinde nichts und schreibe keinerlei Meta-Hinweise wie 'keine weiteren " +
+  "Nachrichten gefunden' - eine solche Zeile ist keine Meldung. " +
   "Antworte AUSSCHLIESSLICH mit einem JSON-Array in dieser Form, ohne " +
   "Markdown und ohne Text davor oder danach: " +
   '[{"titel":"...","quelle":"Name des Mediums","url":"https://...","satz":"Eine Einordnung in einem Satz auf Deutsch."}]';
+
+// Belt and braces against exactly the padding the prompt forbids: lines
+// that talk about the search instead of reporting news.
+const META_ITEM = /suchtreffer|suchergebnis|nicht verifizier|nicht seri|keine (weiteren|belastbaren|aktuellen)|liegen keine|keine meldung|top-4|vollständige liste/i;
 
 // Pulls the first JSON array out of the answer - models occasionally wrap
 // JSON in a code fence no matter how firmly told not to.
@@ -33,7 +44,8 @@ export function parseNewsAnswer(answer) {
   const items = parsed
     .filter((item) =>
       item && typeof item.titel === "string" && item.titel.trim() &&
-      typeof item.url === "string" && /^https?:\/\//.test(item.url)
+      typeof item.url === "string" && /^https?:\/\//.test(item.url) &&
+      !META_ITEM.test(item.titel) && !META_ITEM.test(item.satz || "")
     )
     .slice(0, 5)
     .map((item) => ({

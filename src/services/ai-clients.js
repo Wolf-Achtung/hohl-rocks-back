@@ -100,7 +100,15 @@ export function validateApiKeys() {
 const BATTLE_SYSTEM =
   "Antworte auf Deutsch, konkret und kompakt in höchstens 150 Wörtern. " +
   "Nutze kurze Absätze oder eine knappe Liste. Kein Vorgeplänkel, " +
-  "keine Wiederholung der Frage, kein Fazit-Absatz.";
+  "keine Wiederholung der Frage, kein Fazit-Absatz, keine Quellenverweise " +
+  "in eckigen Klammern.";
+
+// Perplexity zitiert trotz jeder Anweisung mit [1][12]-Markern im Text -
+// fuer einen Kurzantwort-Vergleich sind das nur Stolperer. Markdown-Links
+// wie [Text](url) bleiben unberuehrt (Lookahead auf die Klammer).
+function stripCitationMarkers(text) {
+  return text.replace(/\[\d+\](?!\()/g, "").replace(/ +([.,;:!?])/g, "$1").replace(/  +/g, " ");
+}
 
 async function callClaudeForBattle(cleanPrompt) {
   if (!anthropic) throw new Error("Anthropic API key not configured");
@@ -183,7 +191,7 @@ async function callPerplexityForBattle(cleanPrompt) {
     }
 
     const data = await response.json();
-    return data.choices[0].message.content;
+    return stripCitationMarkers(data.choices[0].message.content);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -387,7 +395,7 @@ async function callPerplexityStream(cleanPrompt, onDelta, signal) {
       if (delta) { text += delta; onDelta(delta); }
     });
     if (!text) throw new Error("Empty Perplexity response");
-    return text;
+    return stripCitationMarkers(text);
   } catch (error) {
     throw guard.wrap(error);
   } finally {

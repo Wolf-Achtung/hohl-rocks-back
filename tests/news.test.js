@@ -48,6 +48,23 @@ describe("parseNewsAnswer", () => {
     expect(() => parseNewsAnswer("Leider keine Nachrichten gefunden.")).toThrow();
     expect(() => parseNewsAnswer("[]")).toThrow();
   });
+
+  it("drops meta padding masquerading as headlines", () => {
+    // Exactly what appeared on the live site: the model padded a thin news
+    // day with lines about its own search instead of actual news.
+    const padded = [
+      ...ITEMS,
+      { titel: "Keine belastbaren weiteren KI-Schlagzeilen aus den bereitgestellten Suchtreffern", quelle: "The Decoder", url: "https://the-decoder.de/", satz: "In den vorliegenden Suchergebnissen sind nur zwei konkrete KI-Meldungen enthalten." },
+      { titel: "Weitere aktuelle KI-Nachrichten sind mit den vorliegenden Suchergebnissen nicht verifizierbar", quelle: "The Decoder", url: "https://the-decoder.de/", satz: "Für eine vollständige Top-4-Liste wären zusätzliche Quellen nötig." }
+    ];
+    const items = parseNewsAnswer(JSON.stringify(padded));
+    expect(items).toHaveLength(2);
+    expect(items.every((i) => !/suchtreffer|verifizierbar/i.test(i.titel))).toBe(true);
+  });
+
+  it("allows a two-item day instead of forcing four", () => {
+    expect(parseNewsAnswer(JSON.stringify(ITEMS.slice(0, 2)))).toHaveLength(2);
+  });
 });
 
 describe("getDailyNews", () => {
