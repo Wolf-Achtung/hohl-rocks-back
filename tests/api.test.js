@@ -130,39 +130,23 @@ describe("Content Endpoints", () => {
     expect(data.success).toBe(false);
   });
 
-  it("POST /api/battle-vote accepts a valid model and aggregates", async () => {
-    const res = await fetch(`${baseUrl}/api/battle-vote`, {
+  it("chat logs live in memory only - no database endpoints left", async () => {
+    // Die Postgres-Anbindung ist bewusst entfernt; /health sagt das auch so.
+    const res = await fetch(`${baseUrl}/health`);
+    const data = await res.json();
+    expect(data.checks.chatLogStorage).toContain("in-memory");
+    expect(data.checks.database).toBeUndefined();
+  });
+
+  it("the retired voting endpoints are gone", async () => {
+    const post = await fetch(`${baseUrl}/api/battle-vote`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: "claude" })
     });
-    const data = await res.json();
-    expect(res.status).toBe(200);
-    expect(data.success).toBe(true);
-    expect(data.total).toBeGreaterThanOrEqual(1);
-    expect(data.votes.claude.count).toBeGreaterThanOrEqual(1);
-    expect(data.votes.claude.percent).toBeGreaterThan(0);
-    // all four models are always present, even with zero votes
-    for (const id of ["claude", "gpt", "perplexity", "gemini"]) {
-      expect(data.votes[id]).toBeDefined();
-    }
-  });
-
-  it("POST /api/battle-vote rejects an unknown model", async () => {
-    const res = await fetch(`${baseUrl}/api/battle-vote`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "skynet" })
-    });
-    expect(res.status).toBe(400);
-  });
-
-  it("GET /api/battle-votes returns the running total", async () => {
-    const res = await fetch(`${baseUrl}/api/battle-votes`);
-    const data = await res.json();
-    expect(res.status).toBe(200);
-    expect(data.success).toBe(true);
-    expect(typeof data.total).toBe("number");
+    expect(post.status).toBe(404);
+    const get = await fetch(`${baseUrl}/api/battle-votes`);
+    expect(get.status).toBe(404);
   });
 
   it("GET /api/spark/today returns spark", async () => {

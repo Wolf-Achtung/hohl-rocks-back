@@ -4,7 +4,7 @@
 
 import { Router } from "express";
 import { CHAT_SYSTEM_PROMPT } from "../config/chatPrompt.js";
-import { logConversation } from "../config/database.js";
+import { logConversation } from "../config/chatLog.js";
 import { generalRateLimit } from "../middleware/rateLimit.js";
 import { chatWithClaude } from "../services/ai-clients.js";
 import { moderateContent } from "../services/moderation.js";
@@ -69,8 +69,6 @@ router.post("/api/chat", generalRateLimit, async (req, res) => {
         userMessage: lastUserMessage,
         aiResponse: null,
         model,
-        ipAddress: req.ip || req.connection?.remoteAddress,
-        userAgent: req.get('User-Agent'),
         flagged: true,
         flagReason: modResult.reason,
         responseTimeMs: Date.now() - startTime
@@ -104,8 +102,6 @@ router.post("/api/chat", generalRateLimit, async (req, res) => {
       userMessage: lastUserMessage,
       aiResponse,
       model,
-      ipAddress: req.ip || req.connection?.remoteAddress,
-      userAgent: req.get('User-Agent'),
       flagged: false,
       flagReason: null,
       responseTimeMs: responseTime
@@ -127,8 +123,6 @@ router.post("/api/chat", generalRateLimit, async (req, res) => {
       userMessage: req.body?.messages?.filter(m => m.role === "user").pop()?.content || "unknown",
       aiResponse: null,
       model: "claude",
-      ipAddress: req.ip || req.connection?.remoteAddress,
-      userAgent: req.get('User-Agent'),
       flagged: false,
       flagReason: `error:${error.message}`,
       responseTimeMs: Date.now() - startTime

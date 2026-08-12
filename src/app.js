@@ -12,7 +12,6 @@ import { log } from "./utils/logger.js";
 // Routes
 import healthRoutes from "./routes/health.js";
 import modelBattleRoutes from "./routes/modelBattle.js";
-import battleVoteRoutes from "./routes/battleVote.js";
 import chatRoutes from "./routes/chat.js";
 import promptRoutes from "./routes/prompts.js";
 import contentRoutes from "./routes/content.js";
@@ -108,7 +107,6 @@ app.use((req, res, next) => {
 
 app.use(healthRoutes);
 app.use(modelBattleRoutes);
-app.use(battleVoteRoutes);
 app.use(chatRoutes);
 app.use(promptRoutes);
 app.use(contentRoutes);

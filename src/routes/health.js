@@ -4,7 +4,6 @@
 
 import { Router } from "express";
 import { API_VERSION, NODE_ENV, PORT, MODEL } from "../config/env.js";
-import { isDbConnected, getDbStatus } from "../config/database.js";
 import { FEATURED_PROMPTS } from "../data/prompts.js";
 
 const router = Router();
@@ -40,10 +39,8 @@ router.get("/health", (req, res) => {
     timestamp: new Date().toISOString(),
     checks: {
       api: "ok",
-      database: isDbConnected() ? "connected" : "fallback (in-memory)",
-      // Why, not just what - a silent fallback cost a day of guessing once.
-      // Credentials are stripped in database.js before the text gets here.
-      databaseDetail: getDbStatus(),
+      // Bewusst ohne Datenbank: Gespraeche leben nur im Prozess.
+      chatLogStorage: "in-memory (nicht dauerhaft)",
       rateLimiting: "active"
     },
     environment: {
@@ -70,7 +67,7 @@ router.get("/healthz", (req, res) => {
 router.get("/readyz", (req, res) => {
   res.status(200).json({
     status: "ready",
-    database: isDbConnected() ? "connected" : "in-memory"
+    chatLogStorage: "in-memory"
   });
 });
 

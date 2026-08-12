@@ -6,12 +6,6 @@ export const PORT = process.env.PORT || 8080;
 export const NODE_ENV = process.env.NODE_ENV || "development";
 export const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 
-// Managed Postgres providers (incl. Railway's) commonly use certificates
-// that aren't in the default trust store, so TLS verification is off by
-// default to avoid breaking the DB connection. Set to "true" once the
-// connection string's CA can be verified, to close this MITM gap.
-export const DB_SSL_REJECT_UNAUTHORIZED = process.env.DB_SSL_REJECT_UNAUTHORIZED === "true";
-
 // API Configuration
 export const API_VERSION = "2.8.0";
 export const API_TIMEOUT = 60000; // 60s timeout for AI API calls
