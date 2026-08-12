@@ -28,3 +28,10 @@ export const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
 // API Keys
 export const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
 export const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+// Daily AI news: optional comma-separated domain allowlist handed to
+// Perplexity's search filter (empty = search everywhere)
+export const NEWS_DOMAINS = (process.env.NEWS_DOMAINS || "")
+  .split(",")
+  .map((domain) => domain.trim())
+  .filter(Boolean);

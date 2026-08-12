@@ -40,6 +40,11 @@ describe("GPT in the Model Battle", () => {
     const params = createCompletion.mock.calls[0][0];
     expect(params.max_tokens).toBeUndefined(); // 400s on the GPT-5 family
     expect(params.max_completion_tokens).toBeGreaterThanOrEqual(4096);
+    // default reasoning made battle answers take ~25s
+    expect(params.reasoning_effort).toBe("low");
+    // shared stage direction keeps all four answers short and comparable
+    expect(params.messages[0].role).toBe("system");
+    expect(params.messages[0].content).toMatch(/150 Wörtern/);
   });
 
   it("reports an empty completion as a failure instead of a silent success", async () => {
