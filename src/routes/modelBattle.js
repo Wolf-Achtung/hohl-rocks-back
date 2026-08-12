@@ -42,12 +42,12 @@ router.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
     const responses = await runModelBattle(cleanPrompt);
     const successCount = responses.filter(r => r.success).length;
 
-    log.debug(`Model Battle completed: ${successCount}/4 models successful`);
-    if (NODE_ENV === "development") {
-      responses.forEach(r => {
-        log.debug(`  ${r.name}: ${r.responseTime}ms ${r.success ? '✓' : '✗'}`);
-      });
-    }
+    // Logged at info so a partial battle is visible in production logs; the
+    // per-model reason itself is logged by runModelBattle.
+    const summary = responses
+      .map(r => `${r.model}=${r.success ? `${r.responseTime}ms` : r.error}`)
+      .join(', ');
+    log.info(`Model Battle completed: ${successCount}/4 successful (${summary})`);
 
     res.json({
       success: successCount > 0,
