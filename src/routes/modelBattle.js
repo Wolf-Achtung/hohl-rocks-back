@@ -6,10 +6,66 @@ import { Router } from "express";
 import { NODE_ENV } from "../config/env.js";
 import { modelBattleRateLimit } from "../middleware/rateLimit.js";
 import { runModelBattle, runModelBattleStream, BATTLE_MODEL_IDS } from "../services/ai-clients.js";
+import { moderateContent } from "../services/moderation.js";
 import { sanitizePrompt, setNoCacheHeaders, sendError } from "../utils/helpers.js";
 import { log } from "../utils/logger.js";
 
 const router = Router();
+
+// Was der Besucher zu sehen bekommt, wenn ein Filter greift. Bewusst
+// erklaerend statt abweisend: die Seite verkauft KI-Sicherheit, also ist
+// eine sichtbar arbeitende Leitplanke hier das bessere Schaufenster.
+const BLOCK_TEXTS = {
+  weapons: "Anleitungen zum Bau von Waffen gebe ich nicht weiter.",
+  malware: "Beim Bauen von Schadsoftware mache ich nicht mit. Über Abwehr reden wir gern.",
+  credentials: "Fremde Konten oder Zugangsdaten sind hier tabu.",
+  drugs: "Bei der Herstellung von Drogen bin ich raus.",
+  csam: "Das wird hier nicht verarbeitet.",
+  jailbreak: "Das war ein Versuch, die Regeln zu überschreiben – abgefangen.",
+  selfharm: "Das klingt, als ginge es dir gerade nicht gut."
+};
+
+const GUARD_HINT =
+  "So arbeitet eine Leitplanke: Die Eingabe wird geprüft, bevor sie ein " +
+  "Modell erreicht. Nicht das Vokabular entscheidet, sondern die Absicht – " +
+  "über Angriffe zu sprechen ist erlaubt, eine Anleitung dazu nicht.";
+
+const CARE_HINT =
+  "Bitte sprich mit einem Menschen darüber. Die Telefonseelsorge ist rund " +
+  "um die Uhr erreichbar, kostenlos und anonym: 0800 111 0 111 oder " +
+  "0800 111 0 222. Im Notfall: 112.";
+
+// Gemeinsamer Torwaechter beider Battle-Routen. Antwortet selbst und gibt
+// null zurueck, sonst den geprueften Prompt.
+function guardBattleRequest(req, res, mode) {
+  const cleanPrompt = validateBattlePrompt(req, res);
+  if (cleanPrompt === null) return null;
+
+  // Im Leitplanken-Test sind Rollenwechsel-Versuche das Testmaterial -
+  // sie zu blocken wuerde den Sinn der Uebung zerstoeren. Alles andere
+  // gilt dort genauso.
+  const verdict = moderateContent(cleanPrompt, { allowJailbreak: mode === "guard" });
+  if (verdict.flagged) {
+    log.info(`Battle blocked: ${verdict.category}`);
+    // 200, kein Fehler: die Anzeige soll das erklaeren, nicht als Panne
+    // behandeln. Der Prompt selbst wird nicht zurueckgespiegelt.
+    res.json({
+      success: false,
+      blocked: true,
+      moderation: {
+        category: verdict.category,
+        label: verdict.label,
+        message: BLOCK_TEXTS[verdict.category] || "Diese Anfrage habe ich abgefangen.",
+        hint: verdict.care ? CARE_HINT : GUARD_HINT,
+        care: !!verdict.care
+      },
+      timestamp: new Date().toISOString()
+    });
+    return null;
+  }
+
+  return cleanPrompt;
+}
 
 // Shared validation for both battle routes. Sends the error response itself
 // and returns null, or returns the sanitized prompt.
@@ -46,12 +102,13 @@ router.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
   setNoCacheHeaders(res);
 
   try {
-    const cleanPrompt = validateBattlePrompt(req, res);
+    const mode = req.body?.mode === "guard" ? "guard" : "normal";
+    const cleanPrompt = guardBattleRequest(req, res, mode);
     if (cleanPrompt === null) return;
 
-    log.debug(`Model Battle: "${cleanPrompt.slice(0, 50)}..." (${cleanPrompt.length} chars)`);
+    log.debug(`Model Battle (${mode}): "${cleanPrompt.slice(0, 50)}..." (${cleanPrompt.length} chars)`);
 
-    const responses = await runModelBattle(cleanPrompt);
+    const responses = await runModelBattle(cleanPrompt, mode);
     const successCount = responses.filter(r => r.success).length;
 
     // Logged at info so a partial battle is visible in production logs; the
@@ -84,7 +141,8 @@ router.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
 // moment they arrive, so the four answers type in live instead of appearing
 // after the slowest model finishes.
 router.post("/api/model-battle-stream", modelBattleRateLimit, async (req, res) => {
-  const cleanPrompt = validateBattlePrompt(req, res);
+  const mode = req.body?.mode === "guard" ? "guard" : "normal";
+  const cleanPrompt = guardBattleRequest(req, res, mode);
   if (cleanPrompt === null) return;
 
   // no-transform also opts this response out of the compression middleware,
@@ -102,15 +160,15 @@ router.post("/api/model-battle-stream", modelBattleRateLimit, async (req, res) =
   const abort = new AbortController();
   res.on("close", () => abort.abort());
 
-  log.debug(`Model Battle stream: "${cleanPrompt.slice(0, 50)}..." (${cleanPrompt.length} chars)`);
-  send({ type: "start", models: BATTLE_MODEL_IDS });
+  log.debug(`Model Battle stream (${mode}): "${cleanPrompt.slice(0, 50)}..." (${cleanPrompt.length} chars)`);
+  send({ type: "start", models: BATTLE_MODEL_IDS, mode });
 
   const results = [];
   try {
     await runModelBattleStream(cleanPrompt, (event) => {
       if (event.type === "result") results.push(event);
       send(event);
-    }, abort.signal);
+    }, abort.signal, mode);
   } catch (error) {
     // runModelBattleStream settles every model internally; this is belt and
     // braces so a bug can never leave the connection hanging open.
