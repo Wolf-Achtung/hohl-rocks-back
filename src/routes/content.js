@@ -8,11 +8,11 @@ import { generalRateLimit, promptLibraryRateLimit } from "../middleware/rateLimi
 import { callClaude } from "../services/ai-clients.js";
 import { sanitizePrompt, setCacheHeaders, sendError } from "../utils/helpers.js";
 import { createCache } from "../utils/cache.js";
-import { NEWS_DATABASE, SPARKS_DATABASE } from "../data/prompts.js";
+import { SPARKS_DATABASE } from "../data/prompts.js";
+import { getDailyNews } from "../services/news.js";
 import { log } from "../utils/logger.js";
 
 const router = Router();
-const newsCache = createCache(300000); // 5 min
 // The "daily" challenge is identical for a whole day - cache it per date so
 // each Claude call happens at most once per day instead of once per request
 // (cache key includes the date, so the TTL just needs to outlive the day).
@@ -222,58 +222,24 @@ Bewerte die Antwort und erstelle ein JSON-Objekt:
   }
 });
 
-// KI-News
-router.get("/api/news", promptLibraryRateLimit, (req, res) => {
+// KI-News - live from Perplexity, cached per calendar day in the service.
+// Previously this served a NEWS_DATABASE hardcoded at build time, which
+// froze at whatever the last deploy knew (headlines from 2025 in 2026).
+router.get("/api/news", promptLibraryRateLimit, async (req, res) => {
   try {
-    const { page, limit, compact } = req.query;
-    const pageNum = Math.max(1, parseInt(page) || 1);
-    const limitNum = Math.min(Math.max(1, parseInt(limit) || 6), 20);
+    const news = await getDailyNews();
 
-    const cacheKey = `news:${pageNum}:${limitNum}:${compact || ''}`;
-    const cached = newsCache.get(cacheKey);
-    if (cached) {
-      setCacheHeaders(res, 300, 600);
-      return res.json(cached);
-    }
-
-    const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
-
-    // Rotate the full list so "today" starts at a different offset, then
-    // paginate across the whole rotated list. Previously this built a
-    // fixed 6-item window regardless of `limit`/`page`, so `limit` values
-    // above 6 were silently ignored and page 2+ always came back empty.
-    const startIndex = dayOfYear % NEWS_DATABASE.length;
-    const rotatedNews = NEWS_DATABASE.map((_, i) => NEWS_DATABASE[(startIndex + i) % NEWS_DATABASE.length]);
-
-    const offset = (pageNum - 1) * limitNum;
-    const paginatedNews = rotatedNews.slice(offset, offset + limitNum);
-
-    log.debug(`Serving ${paginatedNews.length} news items (rotation: day ${dayOfYear})`);
-
-    const formattedNews = compact === 'true'
-      ? paginatedNews.map(n => ({ t: n.title, d: n.date, u: n.url, s: n.source }))
-      : paginatedNews;
-
-    const response = {
+    setCacheHeaders(res, 3600, 7200);
+    res.json({
       success: true,
-      items: formattedNews,
-      pagination: {
-        page: pageNum,
-        limit: limitNum,
-        total: rotatedNews.length,
-        pages: Math.ceil(rotatedNews.length / limitNum)
-      },
-      lastUpdated: new Date().toISOString(),
-      rotationDay: dayOfYear
-    };
-
-    newsCache.set(cacheKey, response);
-    setCacheHeaders(res, 300, 600);
-    res.json(response);
-
+      items: news.items,
+      date: news.date,
+      stale: news.stale,
+      lastUpdated: news.fetchedAt
+    });
   } catch (error) {
     log.error("Error fetching news:", error.message);
-    sendError(res, 500, "Failed to fetch news", NODE_ENV === "development" ? error.message : "Ein Fehler ist aufgetreten");
+    sendError(res, 503, "News unavailable", NODE_ENV === "development" ? error.message : "Aktuelle Meldungen sind gerade nicht verfügbar");
   }
 });
 

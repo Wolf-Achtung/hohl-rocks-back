@@ -94,6 +94,14 @@ export function validateApiKeys() {
 // MODEL BATTLE - Parallel AI calls with graceful degradation
 // ===================================================================
 
+// One shared stage direction for all four models. Without it every model
+// writes an essay - unreadable in four columns and slow. Identical wording
+// for everyone keeps the comparison fair.
+const BATTLE_SYSTEM =
+  "Antworte auf Deutsch, konkret und kompakt in höchstens 150 Wörtern. " +
+  "Nutze kurze Absätze oder eine knappe Liste. Kein Vorgeplänkel, " +
+  "keine Wiederholung der Frage, kein Fazit-Absatz.";
+
 async function callClaudeForBattle(cleanPrompt) {
   if (!anthropic) throw new Error("Anthropic API key not configured");
 
@@ -101,6 +109,7 @@ async function callClaudeForBattle(cleanPrompt) {
     anthropic.messages.create({
       model: MODEL,
       max_tokens: 1024,
+      system: BATTLE_SYSTEM,
       thinking: THINKING_DISABLED,
       messages: [{ role: "user", content: cleanPrompt }]
     }),
@@ -124,7 +133,13 @@ async function callGPTForBattle(cleanPrompt) {
       // finish_reason "length". The extra headroom is only spent if the model
       // actually reasons that long.
       max_completion_tokens: 4096,
-      messages: [{ role: "user", content: cleanPrompt }]
+      // Default reasoning made the battle answer take ~25s. "low" is plenty
+      // for short-form answers and cuts that to a fraction.
+      reasoning_effort: "low",
+      messages: [
+        { role: "system", content: BATTLE_SYSTEM },
+        { role: "user", content: cleanPrompt }
+      ]
     }),
     API_TIMEOUT,
     "GPT"
@@ -154,7 +169,10 @@ async function callPerplexityForBattle(cleanPrompt) {
       body: JSON.stringify({
         model: PERPLEXITY_MODEL,
         max_tokens: 1024,
-        messages: [{ role: "user", content: cleanPrompt }]
+        messages: [
+          { role: "system", content: BATTLE_SYSTEM },
+          { role: "user", content: cleanPrompt }
+        ]
       }),
       signal: controller.signal
     });
@@ -189,6 +207,7 @@ async function callGeminiForBattle(cleanPrompt) {
           "x-goog-api-key": GEMINI_API_KEY
         },
         body: JSON.stringify({
+          systemInstruction: { parts: [{ text: BATTLE_SYSTEM }] },
           contents: [{ parts: [{ text: cleanPrompt }] }],
           generationConfig: {
             // Gemini counts its internal thinking against this budget, so 1024
@@ -219,13 +238,221 @@ async function callGeminiForBattle(cleanPrompt) {
   }
 }
 
+// ===================================================================
+// MODEL BATTLE - Streaming variants
+// ===================================================================
+// Same four calls, but tokens are handed to onDelta as they arrive so the
+// route can relay them as Server-Sent Events. Each returns the full text
+// at the end (and throws on empty), so error semantics match the
+// non-streaming path.
+
+// Combines the per-call timeout with the client-disconnect signal. wrap()
+// turns an abort that WE caused (timeout) back into a timeout error so
+// describeBattleError reports "Zeitüberschreitung" instead of a generic
+// abort; a client disconnect stays an abort - nobody is listening anyway.
+function battleGuard(externalSignal) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, API_TIMEOUT);
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort();
+    else externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    finish() {
+      clearTimeout(timer);
+      externalSignal?.removeEventListener("abort", onExternalAbort);
+    },
+    wrap(error) {
+      return timedOut ? new Error(`Stream timeout after ${API_TIMEOUT}ms`) : error;
+    }
+  };
+}
+
+// Minimal SSE reader for the fetch-based providers (Perplexity, Gemini).
+// Feeds every complete `data: {...}` JSON payload to onJson.
+async function readSSE(response, onJson) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let newline;
+    while ((newline = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      try {
+        onJson(JSON.parse(payload));
+      } catch {
+        // A payload split across chunks would already be caught by the
+        // newline framing; anything unparseable here is provider noise.
+      }
+    }
+  }
+}
+
+async function callClaudeStream(cleanPrompt, onDelta, signal) {
+  if (!anthropic) throw new Error("Anthropic API key not configured");
+
+  const guard = battleGuard(signal);
+  try {
+    const stream = anthropic.messages.stream({
+      model: MODEL,
+      max_tokens: 1024,
+      system: BATTLE_SYSTEM,
+      thinking: THINKING_DISABLED,
+      messages: [{ role: "user", content: cleanPrompt }]
+    }, { signal: guard.signal });
+    stream.on("text", (delta) => onDelta(delta));
+    const message = await stream.finalMessage();
+    return extractClaudeText(message);
+  } catch (error) {
+    throw guard.wrap(error);
+  } finally {
+    guard.finish();
+  }
+}
+
+async function callGPTStream(cleanPrompt, onDelta, signal) {
+  if (!openai) throw new Error("OpenAI API key not configured");
+
+  const guard = battleGuard(signal);
+  try {
+    const stream = await openai.chat.completions.create({
+      model: OPENAI_MODEL,
+      max_completion_tokens: 4096,
+      reasoning_effort: "low",
+      stream: true,
+      messages: [
+        { role: "system", content: BATTLE_SYSTEM },
+        { role: "user", content: cleanPrompt }
+      ]
+    }, { signal: guard.signal });
+
+    let text = "";
+    let finishReason;
+    for await (const chunk of stream) {
+      const choice = chunk.choices?.[0];
+      const delta = choice?.delta?.content;
+      if (delta) { text += delta; onDelta(delta); }
+      if (choice?.finish_reason) finishReason = choice.finish_reason;
+    }
+    if (!text) throw new Error(`Empty GPT response (finish_reason: ${finishReason})`);
+    return text;
+  } catch (error) {
+    throw guard.wrap(error);
+  } finally {
+    guard.finish();
+  }
+}
+
+async function callPerplexityStream(cleanPrompt, onDelta, signal) {
+  if (!PERPLEXITY_API_KEY) throw new Error("Perplexity API key not configured");
+
+  const guard = battleGuard(signal);
+  try {
+    const response = await fetch("https://api.perplexity.ai/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${PERPLEXITY_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: PERPLEXITY_MODEL,
+        max_tokens: 1024,
+        stream: true,
+        messages: [
+          { role: "system", content: BATTLE_SYSTEM },
+          { role: "user", content: cleanPrompt }
+        ]
+      }),
+      signal: guard.signal
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => '');
+      throw new Error(`Perplexity API error: ${response.status} ${errorBody.slice(0, 100)}`);
+    }
+
+    let text = "";
+    await readSSE(response, (data) => {
+      const delta = data.choices?.[0]?.delta?.content;
+      if (delta) { text += delta; onDelta(delta); }
+    });
+    if (!text) throw new Error("Empty Perplexity response");
+    return text;
+  } catch (error) {
+    throw guard.wrap(error);
+  } finally {
+    guard.finish();
+  }
+}
+
+async function callGeminiStream(cleanPrompt, onDelta, signal) {
+  if (!GEMINI_API_KEY) throw new Error("Gemini API key not configured");
+
+  const guard = battleGuard(signal);
+  try {
+    const response = await fetch(
+      // Key goes in a header, not the URL - query strings end up in proxy
+      // logs and error messages.
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?alt=sse`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": GEMINI_API_KEY
+        },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: BATTLE_SYSTEM }] },
+          contents: [{ parts: [{ text: cleanPrompt }] }],
+          generationConfig: {
+            maxOutputTokens: 4096,
+            temperature: 0.7
+          }
+        }),
+        signal: guard.signal
+      }
+    );
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => '');
+      throw new Error(`Gemini API error: ${response.status} ${errorBody.slice(0, 100)}`);
+    }
+
+    let text = "";
+    let finishReason;
+    await readSSE(response, (data) => {
+      const candidate = data.candidates?.[0];
+      const delta = candidate?.content?.parts?.map((p) => p.text).filter(Boolean).join("");
+      if (delta) { text += delta; onDelta(delta); }
+      if (candidate?.finishReason) finishReason = candidate.finishReason;
+    });
+    if (!text) throw new Error(`Empty Gemini response (finishReason: ${finishReason})`);
+    return text;
+  } catch (error) {
+    throw guard.wrap(error);
+  } finally {
+    guard.finish();
+  }
+}
+
 // Model registry with metadata
 const BATTLE_MODELS = [
-  { id: "claude", name: "Claude Sonnet 5", callFn: callClaudeForBattle },
-  { id: "gpt", name: "GPT-5 Mini", callFn: callGPTForBattle },
-  { id: "perplexity", name: "Perplexity Sonar Pro", callFn: callPerplexityForBattle },
-  { id: "gemini", name: "Gemini 3.5 Flash", callFn: callGeminiForBattle },
+  { id: "claude", name: "Claude Sonnet 5", callFn: callClaudeForBattle, streamFn: callClaudeStream },
+  { id: "gpt", name: "GPT-5 Mini", callFn: callGPTForBattle, streamFn: callGPTStream },
+  { id: "perplexity", name: "Perplexity Sonar Pro", callFn: callPerplexityForBattle, streamFn: callPerplexityStream },
+  { id: "gemini", name: "Gemini 3.5 Flash", callFn: callGeminiForBattle, streamFn: callGeminiStream },
 ];
+
+export const BATTLE_MODEL_IDS = BATTLE_MODELS.map((m) => m.id);
 
 // Turn a provider error into a short German line the visitor can act on.
 // The SDK clients carry error.status; the fetch-based ones (Perplexity,
@@ -286,6 +513,44 @@ export async function runModelBattle(cleanPrompt) {
       responseTime: 0,
       success: false
     }
+  );
+}
+
+// Streaming twin of runModelBattle: instead of returning an array it emits
+// events - {type:"delta"} per text chunk, {type:"result"} once per model.
+// The result event carries the same fields as a runModelBattle entry, so
+// the frontend can share its rendering with the JSON fallback path.
+export async function runModelBattleStream(cleanPrompt, emit, signal) {
+  await Promise.allSettled(
+    BATTLE_MODELS.map(async (model) => {
+      const startTime = Date.now();
+      try {
+        const response = await model.streamFn(
+          cleanPrompt,
+          (text) => emit({ type: "delta", model: model.id, text }),
+          signal
+        );
+        emit({
+          type: "result",
+          model: model.id,
+          name: model.name,
+          response,
+          responseTime: Date.now() - startTime,
+          success: true
+        });
+      } catch (error) {
+        log.warn(`Model Battle (stream) - ${model.name} failed: ${error.message}`);
+        emit({
+          type: "result",
+          model: model.id,
+          name: model.name,
+          response: null,
+          error: describeBattleError(error),
+          responseTime: Date.now() - startTime,
+          success: false
+        });
+      }
+    })
   );
 }
 

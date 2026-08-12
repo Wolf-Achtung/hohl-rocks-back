@@ -65,6 +65,12 @@ async function initDatabase() {
       );
       CREATE INDEX IF NOT EXISTS idx_chat_logs_session ON chat_logs(session_id);
       CREATE INDEX IF NOT EXISTS idx_chat_logs_created ON chat_logs(created_at);
+      CREATE TABLE IF NOT EXISTS battle_votes (
+        id SERIAL PRIMARY KEY,
+        model VARCHAR(32) NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_battle_votes_model ON battle_votes(model);
     `);
     log.info('Database tables initialized');
   } catch (error) {
@@ -120,6 +126,42 @@ export async function closePool() {
     await pool.end();
     log.info('Database pool closed');
   }
+}
+
+// ===================================================================
+// BATTLE VOTES (blind battle "which answer is best")
+// ===================================================================
+// Votes carry no personal data - just the model id and a timestamp - so
+// unlike chat logs they are kept indefinitely: the running total is the
+// point of the feature.
+
+const inMemoryVotes = new Map();
+
+export async function recordBattleVote(model) {
+  if (pool && dbConnected) {
+    await pool.query('INSERT INTO battle_votes (model) VALUES ($1)', [model]);
+  } else {
+    inMemoryVotes.set(model, (inMemoryVotes.get(model) || 0) + 1);
+  }
+}
+
+// Returns { counts: {model: n, ...}, total }
+export async function getBattleVotes() {
+  if (pool && dbConnected) {
+    const result = await pool.query(
+      'SELECT model, COUNT(*)::int AS votes FROM battle_votes GROUP BY model'
+    );
+    const counts = {};
+    let total = 0;
+    for (const row of result.rows) {
+      counts[row.model] = row.votes;
+      total += row.votes;
+    }
+    return { counts, total };
+  }
+  const counts = Object.fromEntries(inMemoryVotes);
+  const total = [...inMemoryVotes.values()].reduce((sum, n) => sum + n, 0);
+  return { counts, total };
 }
 
 // Log a conversation to database or in-memory

@@ -121,12 +121,48 @@ describe("Model Battle", () => {
 });
 
 describe("Content Endpoints", () => {
-  it("GET /api/news returns news items", async () => {
+  // News are fetched live via Perplexity; without a key the endpoint
+  // must degrade to an honest 503, not pretend with canned items.
+  it("GET /api/news degrades cleanly without a Perplexity key", async () => {
     const res = await fetch(`${baseUrl}/api/news`);
+    const data = await res.json();
+    expect(res.status).toBe(503);
+    expect(data.success).toBe(false);
+  });
+
+  it("POST /api/battle-vote accepts a valid model and aggregates", async () => {
+    const res = await fetch(`${baseUrl}/api/battle-vote`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "claude" })
+    });
     const data = await res.json();
     expect(res.status).toBe(200);
     expect(data.success).toBe(true);
-    expect(data.items.length).toBeGreaterThan(0);
+    expect(data.total).toBeGreaterThanOrEqual(1);
+    expect(data.votes.claude.count).toBeGreaterThanOrEqual(1);
+    expect(data.votes.claude.percent).toBeGreaterThan(0);
+    // all four models are always present, even with zero votes
+    for (const id of ["claude", "gpt", "perplexity", "gemini"]) {
+      expect(data.votes[id]).toBeDefined();
+    }
+  });
+
+  it("POST /api/battle-vote rejects an unknown model", async () => {
+    const res = await fetch(`${baseUrl}/api/battle-vote`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "skynet" })
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("GET /api/battle-votes returns the running total", async () => {
+    const res = await fetch(`${baseUrl}/api/battle-votes`);
+    const data = await res.json();
+    expect(res.status).toBe(200);
+    expect(data.success).toBe(true);
+    expect(typeof data.total).toBe("number");
   });
 
   it("GET /api/spark/today returns spark", async () => {
