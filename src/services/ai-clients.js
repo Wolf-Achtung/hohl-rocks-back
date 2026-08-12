@@ -118,15 +118,24 @@ async function callGPTForBattle(cleanPrompt) {
     openai.chat.completions.create({
       model: OPENAI_MODEL,
       // GPT-5-family (and o-series) models reject `max_tokens` with a 400;
-      // `max_completion_tokens` is the accepted parameter.
-      max_completion_tokens: 1024,
+      // `max_completion_tokens` is the accepted parameter. It covers the
+      // invisible reasoning tokens too - at 1024 the reasoning could eat the
+      // whole budget and the call returned HTTP 200 with content: "" and
+      // finish_reason "length". The extra headroom is only spent if the model
+      // actually reasons that long.
+      max_completion_tokens: 4096,
       messages: [{ role: "user", content: cleanPrompt }]
     }),
     API_TIMEOUT,
     "GPT"
   );
 
-  return completion.choices[0].message.content;
+  const choice = completion.choices?.[0];
+  const text = choice?.message?.content;
+  if (!text) {
+    throw new Error(`Empty GPT response (finish_reason: ${choice?.finish_reason})`);
+  }
+  return text;
 }
 
 async function callPerplexityForBattle(cleanPrompt) {
@@ -182,7 +191,10 @@ async function callGeminiForBattle(cleanPrompt) {
         body: JSON.stringify({
           contents: [{ parts: [{ text: cleanPrompt }] }],
           generationConfig: {
-            maxOutputTokens: 1024,
+            // Gemini counts its internal thinking against this budget, so 1024
+            // truncated answers mid-sentence (visible in the UI as a dangling
+            // "**" from an unclosed bold marker).
+            maxOutputTokens: 4096,
             temperature: 0.7
           }
         }),
@@ -196,8 +208,11 @@ async function callGeminiForBattle(cleanPrompt) {
     }
 
     const data = await response.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) throw new Error("Empty Gemini response");
+    const candidate = data.candidates?.[0];
+    const text = candidate?.content?.parts?.map((p) => p.text).filter(Boolean).join("");
+    if (!text) {
+      throw new Error(`Empty Gemini response (finishReason: ${candidate?.finishReason})`);
+    }
     return text;
   } finally {
     clearTimeout(timeoutId);
@@ -211,6 +226,26 @@ const BATTLE_MODELS = [
   { id: "perplexity", name: "Perplexity Sonar Pro", callFn: callPerplexityForBattle },
   { id: "gemini", name: "Gemini 3.5 Flash", callFn: callGeminiForBattle },
 ];
+
+// Turn a provider error into a short German line the visitor can act on.
+// The SDK clients carry error.status; the fetch-based ones (Perplexity,
+// Gemini) put the status into the message, so both are checked.
+export function describeBattleError(error) {
+  const message = error.message || "";
+  const status = error.status ?? Number(message.match(/API error: (\d{3})/)?.[1]);
+
+  if (error.name === "AbortError" || /timeout|Zeitüberschreitung/i.test(message)) {
+    return "Zeitüberschreitung";
+  }
+  if (/not configured/i.test(message)) return "API-Key nicht hinterlegt";
+  if (status === 401 || status === 403) return "API-Key ungültig";
+  if (status === 404) return "Modell nicht verfügbar";
+  if (status === 429) return "Anfrage-Limit erreicht";
+  if (status === 400) return "Anfrage abgelehnt";
+  if (status >= 500) return "Anbieter-Störung";
+  if (/^Empty |refused/i.test(message)) return "Keine Antwort erzeugt";
+  return "Service vorübergehend nicht verfügbar";
+}
 
 export async function runModelBattle(cleanPrompt) {
   const results = await Promise.allSettled(
@@ -226,20 +261,15 @@ export async function runModelBattle(cleanPrompt) {
           success: true
         };
       } catch (error) {
-        log.debug(`${model.name} error: ${error.message}`);
-
-        let errorMessage = "Service vorübergehend nicht verfügbar";
-        if (error.message.includes('timeout') || error.name === 'AbortError') {
-          errorMessage = "Zeitüberschreitung";
-        } else if (error.message.includes('not configured')) {
-          errorMessage = "API Key nicht konfiguriert";
-        }
+        // warn, not debug: debug is silenced in production, which is exactly
+        // where we need to see why a model dropped out.
+        log.warn(`Model Battle - ${model.name} failed: ${error.message}`);
 
         return {
           model: model.id,
           name: model.name,
           response: null,
-          error: errorMessage,
+          error: describeBattleError(error),
           responseTime: Date.now() - startTime,
           success: false
         };
