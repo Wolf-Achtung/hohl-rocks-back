@@ -25,21 +25,45 @@ const BLOCK_TEXTS = {
   selfharm: "Das klingt, als ginge es dir gerade nicht gut."
 };
 
+const BLOCK_TEXTS_EN = {
+  weapons: "I do not pass on instructions for building weapons.",
+  malware: "I will not help build malware. Happy to talk about defence.",
+  credentials: "Other people's accounts or credentials are off limits here.",
+  drugs: "Making drugs is where I stop.",
+  csam: "This is not processed here.",
+  jailbreak: "That was an attempt to overwrite the rules – intercepted.",
+  selfharm: "That sounds like you are not doing well right now."
+};
+
 const GUARD_HINT =
   "So arbeitet eine Leitplanke: Die Eingabe wird geprüft, bevor sie ein " +
   "Modell erreicht. Nicht das Vokabular entscheidet, sondern die Absicht – " +
   "über Angriffe zu sprechen ist erlaubt, eine Anleitung dazu nicht.";
+
+const GUARD_HINT_EN =
+  "This is how a guardrail works: the input is checked before it reaches " +
+  "a model. Vocabulary does not decide, intent does – talking about " +
+  "attacks is fine, a set of instructions for one is not.";
 
 const CARE_HINT =
   "Bitte sprich mit einem Menschen darüber. Die Telefonseelsorge ist rund " +
   "um die Uhr erreichbar, kostenlos und anonym: 0800 111 0 111 oder " +
   "0800 111 0 222. Im Notfall: 112.";
 
+// Dieselben Nummern: die Seite steht in Berlin, und die Telefonseelsorge
+// ist die Stelle, die hier wirklich erreichbar ist.
+const CARE_HINT_EN =
+  "Please talk to someone about this. In Germany, Telefonseelsorge is " +
+  "available around the clock, free and anonymous: 0800 111 0 111 or " +
+  "0800 111 0 222. In an emergency: 112.";
+
 // Gemeinsamer Torwaechter beider Battle-Routen. Antwortet selbst und gibt
 // null zurueck, sonst den geprueften Prompt.
-function guardBattleRequest(req, res, mode) {
+function guardBattleRequest(req, res, mode, sprache) {
   const cleanPrompt = validateBattlePrompt(req, res);
   if (cleanPrompt === null) return null;
+
+  const englisch = sprache === "en";
 
   // Im Leitplanken-Test sind Rollenwechsel-Versuche das Testmaterial -
   // sie zu blocken wuerde den Sinn der Uebung zerstoeren. Alles andere
@@ -55,8 +79,12 @@ function guardBattleRequest(req, res, mode) {
       moderation: {
         category: verdict.category,
         label: verdict.label,
-        message: BLOCK_TEXTS[verdict.category] || "Diese Anfrage habe ich abgefangen.",
-        hint: verdict.care ? CARE_HINT : GUARD_HINT,
+        message: englisch
+          ? (BLOCK_TEXTS_EN[verdict.category] || "I intercepted this request.")
+          : (BLOCK_TEXTS[verdict.category] || "Diese Anfrage habe ich abgefangen."),
+        hint: verdict.care
+          ? (englisch ? CARE_HINT_EN : CARE_HINT)
+          : (englisch ? GUARD_HINT_EN : GUARD_HINT),
         care: !!verdict.care
       },
       timestamp: new Date().toISOString()
@@ -103,12 +131,15 @@ router.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
 
   try {
     const mode = req.body?.mode === "guard" ? "guard" : "normal";
-    const cleanPrompt = guardBattleRequest(req, res, mode);
+    // Die Seite unter /en/ schickt ihre Sprache mit. Alles ausser "en"
+    // bleibt Deutsch - auch fehlende oder unbekannte Werte.
+    const sprache = req.body?.lang === "en" ? "en" : "de";
+    const cleanPrompt = guardBattleRequest(req, res, mode, sprache);
     if (cleanPrompt === null) return;
 
     log.debug(`Model Battle (${mode}): "${cleanPrompt.slice(0, 50)}..." (${cleanPrompt.length} chars)`);
 
-    const responses = await runModelBattle(cleanPrompt, mode);
+    const responses = await runModelBattle(cleanPrompt, mode, sprache);
     const successCount = responses.filter(r => r.success).length;
 
     // Logged at info so a partial battle is visible in production logs; the
@@ -142,7 +173,8 @@ router.post("/api/model-battle", modelBattleRateLimit, async (req, res) => {
 // after the slowest model finishes.
 router.post("/api/model-battle-stream", modelBattleRateLimit, async (req, res) => {
   const mode = req.body?.mode === "guard" ? "guard" : "normal";
-  const cleanPrompt = guardBattleRequest(req, res, mode);
+  const sprache = req.body?.lang === "en" ? "en" : "de";
+  const cleanPrompt = guardBattleRequest(req, res, mode, sprache);
   if (cleanPrompt === null) return;
 
   // no-transform also opts this response out of the compression middleware,
@@ -161,14 +193,14 @@ router.post("/api/model-battle-stream", modelBattleRateLimit, async (req, res) =
   res.on("close", () => abort.abort());
 
   log.debug(`Model Battle stream (${mode}): "${cleanPrompt.slice(0, 50)}..." (${cleanPrompt.length} chars)`);
-  send({ type: "start", models: BATTLE_MODEL_IDS, mode });
+  send({ type: "start", models: BATTLE_MODEL_IDS, mode, lang: sprache });
 
   const results = [];
   try {
     await runModelBattleStream(cleanPrompt, (event) => {
       if (event.type === "result") results.push(event);
       send(event);
-    }, abort.signal, mode);
+    }, abort.signal, mode, sprache);
   } catch (error) {
     // runModelBattleStream settles every model internally; this is belt and
     // braces so a bug can never leave the connection hanging open.

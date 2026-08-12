@@ -227,7 +227,9 @@ Bewerte die Antwort und erstelle ein JSON-Objekt:
 // froze at whatever the last deploy knew (headlines from 2025 in 2026).
 router.get("/api/news", promptLibraryRateLimit, async (req, res) => {
   try {
-    const news = await getDailyNews();
+    // Die Seite unter /en/ haengt ?lang=en an. Eigene Adresse, eigener
+    // Cache-Eintrag - im Dienst wie im CDN davor.
+    const news = await getDailyNews(req.query?.lang === "en" ? "en" : "de");
 
     setCacheHeaders(res, 3600, 7200);
     res.json({

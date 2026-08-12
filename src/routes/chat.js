@@ -3,7 +3,7 @@
 // ===================================================================
 
 import { Router } from "express";
-import { CHAT_SYSTEM_PROMPT } from "../config/chatPrompt.js";
+import { chatPromptFor } from "../config/chatPrompt.js";
 import { logConversation } from "../config/chatLog.js";
 import { generalRateLimit } from "../middleware/rateLimit.js";
 import { chatWithClaude } from "../services/ai-clients.js";
@@ -26,6 +26,9 @@ router.post("/api/chat", generalRateLimit, async (req, res) => {
 
   try {
     const { messages, model: requestedModel } = req.body;
+    // Die Seite unter /en/ schickt ihre Sprache mit. Alles ausser
+    // "en" bleibt Deutsch - auch fehlende oder unbekannte Werte.
+    const sprache = req.body?.lang === "en" ? "en" : "de";
     const model = SUPPORTED_MODELS.includes(requestedModel) ? requestedModel : "claude";
 
     // Validate messages array
@@ -78,7 +81,9 @@ router.post("/api/chat", generalRateLimit, async (req, res) => {
 
       return res.json({
         success: true,
-        response: "Das ist nicht mein Thema. Frag mich lieber was über KI, meine Arbeit oder den SC Freiburg! ⚽",
+        response: sprache === "en"
+          ? "That is not my subject. Ask me about AI, my work or SC Freiburg instead! ⚽"
+          : "Das ist nicht mein Thema. Frag mich lieber was über KI, meine Arbeit oder den SC Freiburg! ⚽",
         model: "moderation",
         flagged: true,
         timestamp: new Date().toISOString()
@@ -88,7 +93,7 @@ router.post("/api/chat", generalRateLimit, async (req, res) => {
     log.debug(`Chat request (model: ${model})`);
 
     const aiResponse = await chatWithClaude({
-      systemMessage: CHAT_SYSTEM_PROMPT,
+      systemMessage: chatPromptFor(sprache),
       userMessages: userMessages.map(m => ({
         role: m.role,
         content: sanitizePrompt(m.content)

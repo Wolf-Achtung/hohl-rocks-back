@@ -8,9 +8,14 @@
 import { PERPLEXITY_API_KEY, PERPLEXITY_MODEL, NEWS_DOMAINS, API_TIMEOUT } from "../config/env.js";
 import { log } from "../utils/logger.js";
 
-// One entry per calendar day (Europe/Berlin - the site's audience).
-let cache = { dateKey: null, items: null, fetchedAt: null };
-let inflight = null;
+// Ein Eintrag je Kalendertag (Europe/Berlin - das Publikum der Seite)
+// und je Sprache: die Seite unter /en/ bekommt dieselben Meldungen auf
+// Englisch, also zwei Abrufe am Tag statt einem.
+const leer = () => ({ dateKey: null, items: null, fetchedAt: null });
+let caches = { de: leer(), en: leer() };
+let inflights = { de: null, en: null };
+const SPRACHEN = ["de", "en"];
+const normSprache = (sprache) => (sprache === "en" ? "en" : "de");
 
 // sv-SE formats as YYYY-MM-DD
 const berlinDay = () =>
@@ -19,7 +24,7 @@ const berlinDay = () =>
 // Deliberately 2-5 instead of a fixed count: a fixed "give me 4" made the
 // model pad thin days with meta lines like "keine weiteren Meldungen
 // verifizierbar" - which then rendered as fake headlines on the site.
-const NEWS_PROMPT =
+const NEWS_PROMPT_DE =
   "Suche die wichtigsten KI-Nachrichten der letzten 24 Stunden " +
   "(neue Modelle, Regulierung, Forschung, bedeutende Produkte). " +
   "Gib zwischen 2 und 5 Meldungen aus - aber NUR echte, belegbare Meldungen " +
@@ -30,9 +35,23 @@ const NEWS_PROMPT =
   "Markdown und ohne Text davor oder danach: " +
   '[{"titel":"...","quelle":"Name des Mediums","url":"https://...","satz":"Eine Einordnung in einem Satz auf Deutsch."}]';
 
+// Gleiche Regeln, gleiche Feldnamen - nur die Sprache der Ausgabe wechselt.
+// Die Feldnamen bleiben absichtlich deutsch: sie sind der Vertrag mit der
+// Anzeige, nicht Text fuer den Leser.
+const NEWS_PROMPT_EN =
+  "Find the most important AI news of the last 24 hours " +
+  "(new models, regulation, research, significant products). " +
+  "Return between 2 and 5 items - but ONLY real, verifiable items with a " +
+  "concrete article URL. If you find only two, return only two. " +
+  "Invent nothing and write no meta notes such as 'no further news found' " +
+  "- a line like that is not an item. " +
+  "Answer ONLY with a JSON array in this form, without markdown and " +
+  "without any text before or after: " +
+  '[{"titel":"...","quelle":"name of the outlet","url":"https://...","satz":"One sentence of context in English."}]';
+
 // Belt and braces against exactly the padding the prompt forbids: lines
 // that talk about the search instead of reporting news.
-const META_ITEM = /suchtreffer|suchergebnis|nicht verifizier|nicht seri|keine (weiteren|belastbaren|aktuellen)|liegen keine|keine meldung|top-4|vollständige liste/i;
+const META_ITEM = /suchtreffer|suchergebnis|nicht verifizier|nicht seri|keine (weiteren|belastbaren|aktuellen)|liegen keine|keine meldung|top-4|vollständige liste|no (further|additional|more) (news|items|results)|nothing further|search results?$/i;
 
 // Pulls the first JSON array out of the answer - models occasionally wrap
 // JSON in a code fence no matter how firmly told not to.
@@ -58,7 +77,7 @@ export function parseNewsAnswer(answer) {
   return items;
 }
 
-async function fetchNewsFromPerplexity() {
+async function fetchNewsFromPerplexity(sprache) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
 
@@ -67,7 +86,7 @@ async function fetchNewsFromPerplexity() {
       model: PERPLEXITY_MODEL,
       max_tokens: 1024,
       search_recency_filter: "day",
-      messages: [{ role: "user", content: NEWS_PROMPT }]
+      messages: [{ role: "user", content: sprache === "en" ? NEWS_PROMPT_EN : NEWS_PROMPT_DE }]
     };
     // Perplexity caps the domain filter at 10 entries
     if (NEWS_DOMAINS.length > 0) {
@@ -98,31 +117,34 @@ async function fetchNewsFromPerplexity() {
 
 // Returns { items, date, fetchedAt, stale } - stale means today's fetch
 // failed and these are yesterday's cached items (better than nothing).
-export async function getDailyNews() {
+export async function getDailyNews(sprache = "de") {
   if (!PERPLEXITY_API_KEY) throw new Error("Perplexity API key not configured");
 
+  const sp = normSprache(sprache);
   const dateKey = berlinDay();
+  const cache = caches[sp];
   if (cache.dateKey === dateKey && cache.items) {
     return { items: cache.items, date: dateKey, fetchedAt: cache.fetchedAt, stale: false };
   }
 
   // Dogpile guard: concurrent requests on a cold cache share one fetch
-  if (!inflight) {
-    inflight = fetchNewsFromPerplexity()
+  if (!inflights[sp]) {
+    inflights[sp] = fetchNewsFromPerplexity(sp)
       .then((items) => {
-        cache = { dateKey, items, fetchedAt: new Date().toISOString() };
+        caches[sp] = { dateKey, items, fetchedAt: new Date().toISOString() };
         return items;
       })
-      .finally(() => { inflight = null; });
+      .finally(() => { inflights[sp] = null; });
   }
 
   try {
-    const items = await inflight;
-    return { items, date: dateKey, fetchedAt: cache.fetchedAt, stale: false };
+    const items = await inflights[sp];
+    return { items, date: dateKey, fetchedAt: caches[sp].fetchedAt, stale: false };
   } catch (error) {
-    if (cache.items) {
-      log.warn(`Daily news refresh failed, serving stale items: ${error.message}`);
-      return { items: cache.items, date: cache.dateKey, fetchedAt: cache.fetchedAt, stale: true };
+    const alt = caches[sp];
+    if (alt.items) {
+      log.warn(`Daily news refresh failed (${sp}), serving stale items: ${error.message}`);
+      return { items: alt.items, date: alt.dateKey, fetchedAt: alt.fetchedAt, stale: true };
     }
     throw error;
   }
@@ -130,11 +152,14 @@ export async function getDailyNews() {
 
 // Test hooks
 export function resetNewsCache() {
-  cache = { dateKey: null, items: null, fetchedAt: null };
-  inflight = null;
+  for (const sp of SPRACHEN) {
+    caches[sp] = leer();
+    inflights[sp] = null;
+  }
 }
 
-export function seedNewsCache(dateKey, items) {
-  cache = { dateKey, items, fetchedAt: new Date().toISOString() };
-  inflight = null;
+export function seedNewsCache(dateKey, items, sprache = "de") {
+  const sp = normSprache(sprache);
+  caches[sp] = { dateKey, items, fetchedAt: new Date().toISOString() };
+  inflights[sp] = null;
 }
