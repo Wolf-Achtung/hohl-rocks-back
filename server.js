@@ -5,7 +5,6 @@
 
 import app from "./src/app.js";
 import { PORT, NODE_ENV, API_VERSION, MODEL } from "./src/config/env.js";
-import { isDbConnected, closePool } from "./src/config/database.js";
 import { validateApiKeys } from "./src/services/ai-clients.js";
 import { FEATURED_PROMPTS } from "./src/data/prompts.js";
 import { log } from "./src/utils/logger.js";
@@ -50,7 +49,7 @@ const server = app.listen(PORT, () => {
 
   log.info(`Server ready at http://localhost:${PORT}`);
   log.info(`Rate Limiting: Model Battle 10/min, Admin 30/min, GDPR 10/min`);
-  log.info(`Database: ${isDbConnected() ? 'PostgreSQL connected' : 'In-memory fallback'}`);
+  log.info(`Chat logs: in-memory only, no database`);
 });
 
 // ===================================================================
@@ -59,13 +58,8 @@ const server = app.listen(PORT, () => {
 
 async function gracefulShutdown(signal) {
   log.warn(`${signal} received: shutting down gracefully`);
-  server.close(async () => {
+  server.close(() => {
     log.info('HTTP server closed');
-    try {
-      await closePool();
-    } catch (err) {
-      log.error('Error closing database pool:', err.message);
-    }
     process.exit(0);
   });
   // Force shutdown after 10s

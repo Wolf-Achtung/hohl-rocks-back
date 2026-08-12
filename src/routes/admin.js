@@ -4,7 +4,7 @@
 
 import { Router } from "express";
 import { MAX_EXPORT_ROWS } from "../config/env.js";
-import { getPool, isDbConnected, getInMemoryLogs } from "../config/database.js";
+import { getChatLogs } from "../config/chatLog.js";
 import { adminAuth } from "../middleware/auth.js";
 import { adminRateLimit } from "../middleware/rateLimit.js";
 import { log } from "../utils/logger.js";
@@ -32,46 +32,12 @@ router.get("/api/admin/chat-logs", adminRateLimit, adminAuth, async (req, res) =
   const onlyFlagged = req.query.flagged === 'true';
 
   try {
-    const pool = getPool();
-    if (pool && isDbConnected()) {
-      let query = 'SELECT * FROM chat_logs';
-      let countQuery = 'SELECT COUNT(*) FROM chat_logs';
-      const params = [];
-
-      if (onlyFlagged) {
-        query += ' WHERE flagged = TRUE';
-        countQuery += ' WHERE flagged = TRUE';
-      }
-
-      query += ' ORDER BY created_at DESC LIMIT $1 OFFSET $2';
-      params.push(limit, offset);
-
-      const [logs, countResult] = await Promise.all([
-        pool.query(query, params),
-        pool.query(countQuery)
-      ]);
-
-      return res.json({
-        success: true,
-        logs: logs.rows,
-        pagination: {
-          page,
-          limit,
-          total: parseInt(countResult.rows[0].count),
-          pages: Math.ceil(countResult.rows[0].count / limit)
-        },
-        source: 'postgresql'
-      });
-    }
-
-    // In-Memory fallback
-    const inMemoryLogs = getInMemoryLogs();
-    let filteredLogs = onlyFlagged
-      ? inMemoryLogs.filter(l => l.flagged)
-      : inMemoryLogs;
+    const allLogs = getChatLogs();
+    const filteredLogs = onlyFlagged ? allLogs.filter(l => l.flagged) : allLogs;
 
     const total = filteredLogs.length;
-    const paginatedLogs = filteredLogs
+    // Kopie sortieren - sort() waere sonst destruktiv auf dem Speicher
+    const paginatedLogs = [...filteredLogs]
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
       .slice(offset, offset + limit);
 
@@ -92,17 +58,7 @@ router.get("/api/admin/chat-logs/session/:sessionId", adminRateLimit, adminAuth,
   const { sessionId } = req.params;
 
   try {
-    const pool = getPool();
-    if (pool && isDbConnected()) {
-      const result = await pool.query(
-        'SELECT * FROM chat_logs WHERE session_id = $1 ORDER BY created_at ASC',
-        [sessionId]
-      );
-      return res.json({ success: true, logs: result.rows, count: result.rows.length });
-    }
-
-    const inMemoryLogs = getInMemoryLogs();
-    const sessionLogs = inMemoryLogs
+    const sessionLogs = getChatLogs()
       .filter(l => l.session_id === sessionId)
       .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
@@ -116,27 +72,7 @@ router.get("/api/admin/chat-logs/session/:sessionId", adminRateLimit, adminAuth,
 // Chat stats
 router.get("/api/admin/chat-stats", adminRateLimit, adminAuth, async (req, res) => {
   try {
-    const pool = getPool();
-    if (pool && isDbConnected()) {
-      const result = await pool.query(`
-        SELECT
-          COUNT(*) as total_conversations,
-          COUNT(DISTINCT session_id) as unique_sessions,
-          COUNT(CASE WHEN flagged THEN 1 END) as flagged_count,
-          ROUND(AVG(response_time_ms)) as avg_response_time,
-          MIN(created_at) as first_conversation,
-          MAX(created_at) as last_conversation,
-          COUNT(CASE WHEN created_at > NOW() - INTERVAL '24 hours' THEN 1 END) as last_24h,
-          COUNT(CASE WHEN created_at > NOW() - INTERVAL '7 days' THEN 1 END) as last_7d,
-          COUNT(CASE WHEN created_at > NOW() - INTERVAL '30 days' THEN 1 END) as last_30d
-        FROM chat_logs
-      `);
-
-      return res.json({ success: true, stats: result.rows[0], source: 'postgresql' });
-    }
-
-    // In-Memory fallback
-    const logs = getInMemoryLogs();
+    const logs = getChatLogs();
     const now = Date.now();
     res.json({
       success: true,
@@ -165,23 +101,7 @@ router.patch("/api/admin/chat-logs/:id/flag", adminRateLimit, adminAuth, async (
   const { flagged, reason } = req.body;
 
   try {
-    const pool = getPool();
-    if (pool && isDbConnected()) {
-      const result = await pool.query(
-        'UPDATE chat_logs SET flagged = $1, flag_reason = $2 WHERE id = $3 RETURNING *',
-        [!!flagged, reason || null, id]
-      );
-
-      if (result.rows.length === 0) {
-        return sendError(res, 404, 'Chat log not found');
-      }
-
-      return res.json({ success: true, log: result.rows[0] });
-    }
-
-    // In-Memory fallback
-    const logs = getInMemoryLogs();
-    const logEntry = logs.find(l => l.id === id);
+    const logEntry = getChatLogs().find(l => l.id === id);
     if (!logEntry) {
       return sendError(res, 404, 'Chat log not found');
     }
@@ -211,28 +131,14 @@ router.get("/api/admin/chat-logs/export", adminRateLimit, adminAuth, async (req,
   }
 
   try {
-    let logs = [];
-
-    const pool = getPool();
-    if (pool && isDbConnected()) {
-      const result = await pool.query(`
-        SELECT created_at, session_id, user_message, ai_response, flagged, flag_reason, response_time_ms
-        FROM chat_logs
-        WHERE created_at BETWEEN $1 AND $2
-        ORDER BY created_at DESC
-        LIMIT $3
-      `, [from || '1970-01-01', to || new Date().toISOString(), MAX_EXPORT_ROWS]);
-      logs = result.rows;
-    } else {
-      const filterFrom = fromDate || new Date(0);
-      const filterTo = toDate || new Date();
-      logs = getInMemoryLogs()
-        .filter(log => {
-          const logDate = new Date(log.created_at);
-          return logDate >= filterFrom && logDate <= filterTo;
-        })
-        .slice(0, MAX_EXPORT_ROWS);
-    }
+    const filterFrom = fromDate || new Date(0);
+    const filterTo = toDate || new Date();
+    const logs = getChatLogs()
+      .filter(entry => {
+        const entryDate = new Date(entry.created_at);
+        return entryDate >= filterFrom && entryDate <= filterTo;
+      })
+      .slice(0, MAX_EXPORT_ROWS);
 
     const headers = ['Datum', 'Session', 'User-Nachricht', 'KI-Antwort', 'Markiert', 'Grund', 'Antwortzeit (ms)'];
     const csv = [
