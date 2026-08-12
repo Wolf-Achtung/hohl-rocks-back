@@ -12,34 +12,62 @@ let dbConnected = false;
 // In-memory fallback for chat logs
 const inMemoryChatLogs = [];
 
-if (process.env.DATABASE_URL) {
-  try {
-    pool = new pg.Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: NODE_ENV === 'production' ? { rejectUnauthorized: DB_SSL_REJECT_UNAUTHORIZED } : false,
-      max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 5000
-    });
+function buildPool(ssl) {
+  const candidate = new pg.Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl,
+    max: 10,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000
+  });
+  candidate.on('error', (err) => {
+    log.error('Unexpected database pool error', err.message);
+  });
+  return candidate;
+}
 
-    pool.on('error', (err) => {
-      log.error('Unexpected database pool error', err.message);
-    });
+async function connectDatabase() {
+  // First attempt honors the configured TLS posture. Railway's internal
+  // network (*.railway.internal) speaks no TLS at all though - pg then
+  // fails with "The server does not support SSL connections" no matter
+  // how rejectUnauthorized is set. In that case (and only for TLS-shaped
+  // errors) retry once without TLS instead of silently degrading to the
+  // in-memory fallback: an unencrypted private-network connection beats
+  // chat logs and battle votes that vanish on every restart.
+  const configuredSsl = NODE_ENV === 'production'
+    ? { rejectUnauthorized: DB_SSL_REJECT_UNAUTHORIZED }
+    : false;
 
-    // Test connection
-    pool.query('SELECT NOW()')
-      .then(() => {
-        dbConnected = true;
-        log.info('PostgreSQL connected');
-        initDatabase().then(() => startRetentionJob());
-      })
-      .catch(err => {
-        log.warn('PostgreSQL connection failed, using in-memory fallback', err.message);
-        pool = null;
-      });
-  } catch (error) {
-    log.warn('PostgreSQL setup failed, using in-memory fallback', error.message);
+  const attempts = [{ ssl: configuredSsl, label: 'TLS' }];
+  if (configuredSsl) attempts.push({ ssl: false, label: 'no TLS (server refused SSL)' });
+
+  for (const attempt of attempts) {
+    const candidate = buildPool(attempt.ssl);
+    try {
+      await candidate.query('SELECT NOW()');
+      pool = candidate;
+      dbConnected = true;
+      log.info(`PostgreSQL connected (${attempt.label})`);
+      await initDatabase();
+      startRetentionJob();
+      return;
+    } catch (err) {
+      await candidate.end().catch(() => {});
+      const sslProblem = /SSL|TLS|certificate/i.test(err.message);
+      if (attempt.ssl && sslProblem) {
+        log.warn(`PostgreSQL ${attempt.label} connection failed (${err.message}), retrying without TLS`);
+        continue;
+      }
+      log.warn('PostgreSQL connection failed, using in-memory fallback', err.message);
+      return;
+    }
   }
+}
+
+if (process.env.DATABASE_URL) {
+  connectDatabase().catch((error) => {
+    log.warn('PostgreSQL setup failed, using in-memory fallback', error.message);
+  });
 } else {
   log.info('DATABASE_URL not set, using in-memory chat logging');
 }

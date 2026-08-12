@@ -100,6 +100,20 @@ describe("runModelBattle", () => {
     expect(byModel.gpt.error).toBe("API-Key nicht hinterlegt");
   });
 
+  it("strips Perplexity citation markers but keeps markdown links", async () => {
+    stubFetch((url) => {
+      if (url.includes("perplexity")) {
+        return jsonResponse({ choices: [{ message: { content:
+          "KI hilft [1][12] wirklich [3]. Mehr unter [heise](https://heise.de) [4]."
+        } }] });
+      }
+      return jsonResponse({ candidates: [{ content: { parts: [{ text: "ok" }] } }] });
+    });
+
+    const perplexity = (await runModelBattle("Testfrage")).find(r => r.model === "perplexity");
+    expect(perplexity.response).toBe("KI hilft wirklich. Mehr unter [heise](https://heise.de).");
+  });
+
   it("joins multi-part Gemini answers instead of dropping all but the first", async () => {
     stubFetch(() => jsonResponse({
       candidates: [{ content: { parts: [{ text: "Teil eins. " }, { text: "Teil zwei." }] } }]
