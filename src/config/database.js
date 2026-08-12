@@ -15,9 +15,9 @@ let dbStatus = "not configured";
 // In-memory fallback for chat logs
 const inMemoryChatLogs = [];
 
-function buildPool(ssl) {
+function buildPool(connectionString, ssl) {
   const candidate = new pg.Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString,
     ssl,
     max: 10,
     idleTimeoutMillis: 30000,
@@ -37,40 +37,59 @@ function safeError(message) {
     .slice(0, 200);
 }
 
-// One connection round: honor the configured TLS posture first, then retry
-// without TLS if - and only if - the server refused SSL outright. Railway's
-// private network speaks no TLS, and pg then fails with "The server does not
-// support SSL connections" regardless of rejectUnauthorized. An unencrypted
-// connection inside the private network beats chat logs and battle votes
-// that vanish on every restart.
+// Railway's private hostname only resolves inside the same project and
+// environment - otherwise pg fails with ENOTFOUND and the private URL is
+// simply the wrong address. Railway hands out DATABASE_PUBLIC_URL for
+// exactly that case, so try it as a second address rather than losing the
+// database entirely. Private first: it stays inside the network and costs
+// no egress.
+function connectionTargets() {
+  const targets = [];
+  if (process.env.DATABASE_URL) {
+    targets.push({ url: process.env.DATABASE_URL, label: 'private' });
+  }
+  if (process.env.DATABASE_PUBLIC_URL && process.env.DATABASE_PUBLIC_URL !== process.env.DATABASE_URL) {
+    targets.push({ url: process.env.DATABASE_PUBLIC_URL, label: 'public' });
+  }
+  return targets;
+}
+
+// One connection round over all known addresses. Per address the configured
+// TLS posture comes first, then a retry without TLS if - and only if - the
+// server refused SSL outright: Railway's private network speaks no TLS, and
+// pg then fails with "The server does not support SSL connections"
+// regardless of rejectUnauthorized. An unencrypted connection inside the
+// private network beats chat logs and votes that vanish on every restart.
 async function tryConnect() {
   const configuredSsl = NODE_ENV === 'production'
     ? { rejectUnauthorized: DB_SSL_REJECT_UNAUTHORIZED }
     : false;
 
-  const attempts = [{ ssl: configuredSsl, label: 'TLS' }];
-  if (configuredSsl) attempts.push({ ssl: false, label: 'no TLS' });
-
   let lastError = "unknown";
-  for (const attempt of attempts) {
-    const candidate = buildPool(attempt.ssl);
-    try {
-      await candidate.query('SELECT NOW()');
-      pool = candidate;
-      dbConnected = true;
-      dbStatus = `connected (${attempt.label})`;
-      log.info(`PostgreSQL connected (${attempt.label})`);
-      await initDatabase();
-      startRetentionJob();
-      return true;
-    } catch (err) {
-      await candidate.end().catch(() => {});
-      lastError = safeError(err.message);
-      if (attempt.ssl && /SSL|TLS|certificate/i.test(err.message)) {
-        log.warn(`PostgreSQL TLS attempt failed (${lastError}), retrying without TLS`);
-        continue;
+  for (const target of connectionTargets()) {
+    const attempts = [{ ssl: configuredSsl, label: 'TLS' }];
+    if (configuredSsl) attempts.push({ ssl: false, label: 'no TLS' });
+
+    for (const attempt of attempts) {
+      const candidate = buildPool(target.url, attempt.ssl);
+      try {
+        await candidate.query('SELECT NOW()');
+        pool = candidate;
+        dbConnected = true;
+        dbStatus = `connected (${target.label}, ${attempt.label})`;
+        log.info(`PostgreSQL connected (${target.label}, ${attempt.label})`);
+        await initDatabase();
+        startRetentionJob();
+        return true;
+      } catch (err) {
+        await candidate.end().catch(() => {});
+        lastError = `${target.label}: ${safeError(err.message)}`;
+        if (attempt.ssl && /SSL|TLS|certificate/i.test(err.message)) {
+          log.warn(`PostgreSQL ${target.label} TLS attempt failed (${lastError}), retrying without TLS`);
+          continue;
+        }
+        break;
       }
-      break;
     }
   }
   dbStatus = `failed: ${lastError}`;
