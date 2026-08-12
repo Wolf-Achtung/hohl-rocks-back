@@ -8,6 +8,9 @@ import { log } from "../utils/logger.js";
 
 let pool = null;
 let dbConnected = false;
+// Why the fallback is active - surfaced by /health so a failed connection
+// is diagnosable without digging through deploy logs.
+let dbStatus = "not configured";
 
 // In-memory fallback for chat logs
 const inMemoryChatLogs = [];
@@ -26,49 +29,80 @@ function buildPool(ssl) {
   return candidate;
 }
 
-async function connectDatabase() {
-  // First attempt honors the configured TLS posture. Railway's internal
-  // network (*.railway.internal) speaks no TLS at all though - pg then
-  // fails with "The server does not support SSL connections" no matter
-  // how rejectUnauthorized is set. In that case (and only for TLS-shaped
-  // errors) retry once without TLS instead of silently degrading to the
-  // in-memory fallback: an unencrypted private-network connection beats
-  // chat logs and battle votes that vanish on every restart.
+// Strip the credentials before any error text leaves this module - pg puts
+// the connection string into some error messages.
+function safeError(message) {
+  return String(message || "unknown")
+    .replace(/postgres(ql)?:\/\/[^\s]*/gi, "postgres://<redacted>")
+    .slice(0, 200);
+}
+
+// One connection round: honor the configured TLS posture first, then retry
+// without TLS if - and only if - the server refused SSL outright. Railway's
+// private network speaks no TLS, and pg then fails with "The server does not
+// support SSL connections" regardless of rejectUnauthorized. An unencrypted
+// connection inside the private network beats chat logs and battle votes
+// that vanish on every restart.
+async function tryConnect() {
   const configuredSsl = NODE_ENV === 'production'
     ? { rejectUnauthorized: DB_SSL_REJECT_UNAUTHORIZED }
     : false;
 
   const attempts = [{ ssl: configuredSsl, label: 'TLS' }];
-  if (configuredSsl) attempts.push({ ssl: false, label: 'no TLS (server refused SSL)' });
+  if (configuredSsl) attempts.push({ ssl: false, label: 'no TLS' });
 
+  let lastError = "unknown";
   for (const attempt of attempts) {
     const candidate = buildPool(attempt.ssl);
     try {
       await candidate.query('SELECT NOW()');
       pool = candidate;
       dbConnected = true;
+      dbStatus = `connected (${attempt.label})`;
       log.info(`PostgreSQL connected (${attempt.label})`);
       await initDatabase();
       startRetentionJob();
-      return;
+      return true;
     } catch (err) {
       await candidate.end().catch(() => {});
-      const sslProblem = /SSL|TLS|certificate/i.test(err.message);
-      if (attempt.ssl && sslProblem) {
-        log.warn(`PostgreSQL ${attempt.label} connection failed (${err.message}), retrying without TLS`);
+      lastError = safeError(err.message);
+      if (attempt.ssl && /SSL|TLS|certificate/i.test(err.message)) {
+        log.warn(`PostgreSQL TLS attempt failed (${lastError}), retrying without TLS`);
         continue;
       }
-      log.warn('PostgreSQL connection failed, using in-memory fallback', err.message);
-      return;
+      break;
     }
   }
+  dbStatus = `failed: ${lastError}`;
+  return false;
+}
+
+// Railway's private network needs a moment after container start - a
+// connection attempt fired at import time can hit DNS before the network
+// is up, which is not a TLS problem and so was never retried. One shot at
+// boot meant the in-memory fallback stuck for the whole process lifetime.
+const RETRY_DELAYS_MS = [2000, 5000, 10000, 20000, 30000];
+
+async function connectDatabase() {
+  if (await tryConnect()) return;
+
+  for (const [index, delay] of RETRY_DELAYS_MS.entries()) {
+    log.warn(`PostgreSQL unavailable (${dbStatus}), retry ${index + 1}/${RETRY_DELAYS_MS.length} in ${delay / 1000}s`);
+    await new Promise((resolve) => setTimeout(resolve, delay).unref());
+    if (await tryConnect()) return;
+  }
+
+  log.warn(`PostgreSQL connection failed after ${RETRY_DELAYS_MS.length + 1} attempts, using in-memory fallback: ${dbStatus}`);
 }
 
 if (process.env.DATABASE_URL) {
+  dbStatus = "connecting";
   connectDatabase().catch((error) => {
-    log.warn('PostgreSQL setup failed, using in-memory fallback', error.message);
+    dbStatus = `failed: ${safeError(error.message)}`;
+    log.warn('PostgreSQL setup failed, using in-memory fallback', safeError(error.message));
   });
 } else {
+  dbStatus = "DATABASE_URL not set";
   log.info('DATABASE_URL not set, using in-memory chat logging');
 }
 
@@ -139,6 +173,11 @@ function startRetentionJob() {
 
 export function isDbConnected() {
   return dbConnected;
+}
+
+// Human-readable reason, for /health
+export function getDbStatus() {
+  return dbStatus;
 }
 
 export function getPool() {
