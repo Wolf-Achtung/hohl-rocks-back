@@ -13,6 +13,7 @@ import { log } from "./utils/logger.js";
 import healthRoutes from "./routes/health.js";
 import modelBattleRoutes from "./routes/modelBattle.js";
 import chatRoutes from "./routes/chat.js";
+import klartextRoutes from "./routes/klartext.js";
 import promptRoutes from "./routes/prompts.js";
 import contentRoutes from "./routes/content.js";
 import adminRoutes from "./routes/admin.js";
@@ -108,6 +109,7 @@ app.use((req, res, next) => {
 app.use(healthRoutes);
 app.use(modelBattleRoutes);
 app.use(chatRoutes);
+app.use(klartextRoutes);
 app.use(promptRoutes);
 app.use(contentRoutes);
 app.use(adminRoutes);
