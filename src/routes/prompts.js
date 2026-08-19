@@ -9,6 +9,7 @@ import { callClaude } from "../services/ai-clients.js";
 import { sanitizePrompt, setCacheHeaders, sendError } from "../utils/helpers.js";
 import { createCache } from "../utils/cache.js";
 import { FEATURED_PROMPTS } from "../data/prompts.js";
+import { log } from "../utils/logger.js";
 
 const router = Router();
 const promptsCache = createCache(300000); // 5 min
@@ -74,6 +75,14 @@ Generiere 5 verschiedene Prompt-Styles (Executive, Technical, Creative, Tutorial
       }
     });
 
+    // Haelt sich das Modell nicht an das [STYLE]/Text-Format, faellt der
+    // Parser auf ein leeres Objekt zurueck. Das ging bisher als success:true
+    // hinaus - der Aufrufer bekam HTTP 200 mit styles:{} und keinen Hinweis,
+    // dass nichts erzeugt wurde.
+    if (Object.keys(styles).length === 0) {
+      throw new Error(`Antwort enthielt keinen erkennbaren Prompt-Style (${response.length} Zeichen)`);
+    }
+
     res.json({
       success: true,
       topic: cleanTopic,
@@ -81,7 +90,7 @@ Generiere 5 verschiedene Prompt-Styles (Executive, Technical, Creative, Tutorial
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("Error in prompt-generator:", error);
+    log.error("Error in prompt-generator:", error.message);
     sendError(res, 500, "Generation failed", NODE_ENV === "development" ? error.message : "Ein Fehler ist aufgetreten");
   }
 });
@@ -128,8 +137,11 @@ Analysiere und optimiere diesen Prompt. Gib einen Score (1-10), liste Probleme, 
     const response = await callClaude(systemPrompt, userPrompt, 2500);
 
     // Parse response
+    // Kein Ersatz-Score mehr: der Default 5 sah aus wie eine Bewertung des
+    // Modells, war aber nur der Parser, der nichts gefunden hatte. Wer "5/10"
+    // liest, glaubt, sein Prompt sei bewertet worden. null sagt die Wahrheit.
     const scoreMatch = response.match(/SCORE:\s*(\d+)/);
-    const score = scoreMatch ? parseInt(scoreMatch[1]) : 5;
+    const score = scoreMatch ? parseInt(scoreMatch[1]) : null;
 
     const problemsMatch = response.match(/PROBLEMS:\n([\s\S]*?)(?=IMPROVED:)/);
     const problems = problemsMatch
@@ -142,6 +154,13 @@ Analysiere und optimiere diesen Prompt. Gib einen Score (1-10), liste Probleme, 
     const explanationMatch = response.match(/EXPLANATION:\n([\s\S]*?)$/);
     const explanation = explanationMatch ? explanationMatch[1].trim() : "";
 
+    // Der optimierte Prompt ist das Produkt dieser Route. Fehlt er, ist die
+    // Antwort wertlos - dann ist ein Fehler ehrlicher als ein leeres Feld
+    // neben einem Score.
+    if (!improved) {
+      throw new Error(`Antwort enthielt keinen optimierten Prompt (${response.length} Zeichen)`);
+    }
+
     res.json({
       success: true,
       original: cleanPrompt,
@@ -149,7 +168,7 @@ Analysiere und optimiere diesen Prompt. Gib einen Score (1-10), liste Probleme, 
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("Error in prompt-optimizer:", error);
+    log.error("Error in prompt-optimizer:", error.message);
     sendError(res, 500, "Optimization failed", NODE_ENV === "development" ? error.message : "Ein Fehler ist aufgetreten");
   }
 });
@@ -219,7 +238,7 @@ router.get("/api/prompts", promptLibraryRateLimit, (req, res) => {
     res.json(response);
 
   } catch (error) {
-    console.error("Error fetching prompts:", error);
+    log.error("Error fetching prompts:", error.message);
     sendError(res, 500, "Failed to fetch prompts", error.message);
   }
 });
@@ -242,7 +261,7 @@ router.get("/api/prompts/:id", promptLibraryRateLimit, (req, res) => {
     setCacheHeaders(res, 600, 1200);
     res.json({ success: true, prompt, timestamp: new Date().toISOString() });
   } catch (error) {
-    console.error("Error fetching prompt:", error);
+    log.error("Error fetching prompt:", error.message);
     sendError(res, 500, "Failed to fetch prompt", error.message);
   }
 });

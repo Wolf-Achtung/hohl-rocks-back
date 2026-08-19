@@ -10,6 +10,8 @@ export function notFoundHandler(req, res) {
   res.status(404).json({
     error: "Not found",
     message: `Route ${req.method} ${req.path} not found`,
+    // Bei neuen Routen mitpflegen: eine 404 mit unvollstaendiger Liste sagt
+    // dem Aufrufer, es gaebe die Route nicht.
     availableRoutes: [
       "GET /",
       "GET /health",
@@ -17,11 +19,13 @@ export function notFoundHandler(req, res) {
       "GET /readyz",
       "GET /api/self",
       "POST /api/chat",
+      "POST /api/klartext",
       "POST /api/prompt-generator",
       "POST /api/prompt-optimizer",
       "GET /api/prompts",
       "GET /api/prompts/:id",
       "POST /api/model-battle",
+      "POST /api/model-battle-stream",
       "GET /api/daily-challenge",
       "POST /api/submit-challenge",
       "GET /api/news",

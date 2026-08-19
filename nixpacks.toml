@@ -1,5 +1,9 @@
 [phases.setup]
-nixPkgs = ["nodejs_20"]
+# Node 20 ist seit 2026-04-30 End-of-Life und bekommt keine Sicherheits-
+# patches mehr. 22 ist Maintenance LTS bis 2027-04-30. Die Zahl hier ist
+# die verbindliche - package.json/engines und .node-version muessen dazu
+# passen, sonst waehlt Railway etwas anderes als gedacht.
+nixPkgs = ["nodejs_22"]
 
 [phases.install]
 # npm ci installs exactly what package-lock.json pins - reproducible builds

@@ -3,7 +3,7 @@
 // ===================================================================
 
 import { Router } from "express";
-import { API_VERSION, NODE_ENV, PORT, MODEL } from "../config/env.js";
+import { API_VERSION, NODE_ENV, PORT, MODEL, ALLOWED_ORIGINS } from "../config/env.js";
 import { FEATURED_PROMPTS } from "../data/prompts.js";
 
 const router = Router();
@@ -46,7 +46,7 @@ router.get("/health", (req, res) => {
     environment: {
       nodeEnv: NODE_ENV,
       port: PORT,
-      corsOrigins: 7,
+      corsOrigins: ALLOWED_ORIGINS.length,
       apiKeysConfigured: {
         anthropic: !!process.env.ANTHROPIC_API_KEY,
         openai: !!process.env.OPENAI_API_KEY,
