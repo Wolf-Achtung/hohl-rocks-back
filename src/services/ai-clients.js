@@ -5,6 +5,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { MODEL, OPENAI_MODEL, PERPLEXITY_MODEL, GEMINI_MODEL, PERPLEXITY_API_KEY, GEMINI_API_KEY, API_TIMEOUT } from "../config/env.js";
+import { MODEL_NAME, OPENAI_MODEL_NAME, PERPLEXITY_MODEL_NAME, GEMINI_MODEL_NAME } from "../config/env.js";
 import { log } from "../utils/logger.js";
 import { withTimeout } from "../utils/helpers.js";
 
@@ -18,11 +19,33 @@ const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
+// Abgeschnitten ist nicht dasselbe wie leer: Laeuft ein Modell in sein
+// Token-Limit, liefert es HTTP 200 mit einem halben Satz. Die Pruefungen
+// unten fangen bisher nur den leeren Fall ab, weil da nichts zu lesen war -
+// der abgeschnittene Fall sah wie eine gueltige Antwort aus.
+//
+// Zwei Aufrufwege, zwei Konsequenzen, deshalb ein Schalter:
+//   strict  - der Aufrufer erwartet JSON (daily-challenge, submit-challenge).
+//             Ein halbes JSON ist unbrauchbar, also Fehler statt Parser-
+//             Kaskade. Vorher endete das in einem nackten SyntaxError, aus
+//             dem niemand "war zu lang" herauslesen konnte.
+//   sonst   - Model Battle. Eine fast fertige Antwort ist mehr wert als gar
+//             keine, also stehen lassen und im Log vermerken. Ohne diesen
+//             Vermerk verschwindet die Truncation spurlos.
+const TRUNCATED = { claude: "max_tokens", gpt: "length", gemini: "MAX_TOKENS" };
+
+function pruefeTruncation(anbieter, grund, kontext, strict) {
+  if (grund !== TRUNCATED[anbieter]) return;
+  const hinweis = `${kontext} abgeschnitten (${anbieter} stop/finish: ${grund}) - max_tokens zu klein`;
+  if (strict) throw new Error(hinweis);
+  log.warn(hinweis);
+}
+
 // Extract the text block from a Claude response. Models like claude-sonnet-5
 // run adaptive thinking by default when no `thinking` param is set, so the
 // first content block can be a thinking block - content[0].text would then be
 // undefined. Refusals arrive as HTTP 200 with an empty content array.
-function extractClaudeText(message) {
+function extractClaudeText(message, { strict = false, kontext = "Claude-Antwort" } = {}) {
   if (message.stop_reason === "refusal") {
     throw new Error("Claude refused the request");
   }
@@ -30,6 +53,7 @@ function extractClaudeText(message) {
   if (!text) {
     throw new Error(`Empty Claude response (stop_reason: ${message.stop_reason})`);
   }
+  pruefeTruncation("claude", message.stop_reason, kontext, strict);
   return text;
 }
 
@@ -56,7 +80,11 @@ export async function callClaude(systemPrompt, userPrompt, maxTokens = 1024) {
     "Claude"
   );
 
-  return extractClaudeText(message);
+  // strict: die Aufrufer dieser Funktion (daily-challenge, submit-challenge,
+  // prompt-generator/-optimizer, klartext) parsen die Antwort weiter. Ein
+  // abgeschnittener Text laeuft dort in einen Folgefehler, der die Ursache
+  // nicht mehr erkennen laesst.
+  return extractClaudeText(message, { strict: true, kontext: "Claude-Antwort" });
 }
 
 // Validate API keys at startup
@@ -237,6 +265,7 @@ async function callGPTForBattle(cleanPrompt, regie) {
   if (!text) {
     throw new Error(`Empty GPT response (finish_reason: ${choice?.finish_reason})`);
   }
+  pruefeTruncation("gpt", choice?.finish_reason, "GPT-Antwort", false);
   return text;
 }
 
@@ -270,7 +299,17 @@ async function callPerplexityForBattle(cleanPrompt, regie) {
     }
 
     const data = await response.json();
-    return stripCitationMarkers(data.choices[0].message.content);
+    // Die drei anderen Anbieter pruefen hier auf Leere, Perplexity nicht -
+    // eine leere Antwort ging als success:true durch und stand als leere
+    // Spalte im Vergleich. Im Leitplanken-Modus war das besonders falsch:
+    // guardHeld("") liefert true, die Leere galt also als bestandener Test.
+    const choice = data.choices?.[0];
+    const text = choice?.message?.content;
+    if (!text) {
+      throw new Error(`Empty Perplexity response (finish_reason: ${choice?.finish_reason})`);
+    }
+    pruefeTruncation("gpt", choice?.finish_reason, "Perplexity-Antwort", false);
+    return stripCitationMarkers(text);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -319,6 +358,7 @@ async function callGeminiForBattle(cleanPrompt, regie) {
     if (!text) {
       throw new Error(`Empty Gemini response (finishReason: ${candidate?.finishReason})`);
     }
+    pruefeTruncation("gemini", candidate?.finishReason, "Gemini-Antwort", false);
     return text;
   } finally {
     clearTimeout(timeoutId);
@@ -399,7 +439,7 @@ async function callClaudeStream(cleanPrompt, onDelta, signal, regie) {
     }, { signal: guard.signal });
     stream.on("text", (delta) => onDelta(delta));
     const message = await stream.finalMessage();
-    return extractClaudeText(message);
+    return extractClaudeText(message, { kontext: "Claude-Stream" });
   } catch (error) {
     throw guard.wrap(error);
   } finally {
@@ -432,6 +472,7 @@ async function callGPTStream(cleanPrompt, onDelta, signal, regie) {
       if (choice?.finish_reason) finishReason = choice.finish_reason;
     }
     if (!text) throw new Error(`Empty GPT response (finish_reason: ${finishReason})`);
+    pruefeTruncation("gpt", finishReason, "GPT-Stream", false);
     return text;
   } catch (error) {
     throw guard.wrap(error);
@@ -469,11 +510,15 @@ async function callPerplexityStream(cleanPrompt, onDelta, signal, regie) {
     }
 
     let text = "";
+    let finishReason;
     await readSSE(response, (data) => {
-      const delta = data.choices?.[0]?.delta?.content;
+      const choice = data.choices?.[0];
+      const delta = choice?.delta?.content;
       if (delta) { text += delta; onDelta(delta); }
+      if (choice?.finish_reason) finishReason = choice.finish_reason;
     });
-    if (!text) throw new Error("Empty Perplexity response");
+    if (!text) throw new Error(`Empty Perplexity response (finish_reason: ${finishReason})`);
+    pruefeTruncation("gpt", finishReason, "Perplexity-Stream", false);
     return stripCitationMarkers(text);
   } catch (error) {
     throw guard.wrap(error);
@@ -523,6 +568,7 @@ async function callGeminiStream(cleanPrompt, onDelta, signal, regie) {
       if (candidate?.finishReason) finishReason = candidate.finishReason;
     });
     if (!text) throw new Error(`Empty Gemini response (finishReason: ${finishReason})`);
+    pruefeTruncation("gemini", finishReason, "Gemini-Stream", false);
     return text;
   } catch (error) {
     throw guard.wrap(error);
@@ -532,11 +578,12 @@ async function callGeminiStream(cleanPrompt, onDelta, signal, regie) {
 }
 
 // Model registry with metadata
+// name kommt aus der Konfiguration, nicht aus dem Code - siehe config/env.js.
 const BATTLE_MODELS = [
-  { id: "claude", name: "Claude Sonnet 5", callFn: callClaudeForBattle, streamFn: callClaudeStream },
-  { id: "gpt", name: "GPT-5 Mini", callFn: callGPTForBattle, streamFn: callGPTStream },
-  { id: "perplexity", name: "Perplexity Sonar Pro", callFn: callPerplexityForBattle, streamFn: callPerplexityStream },
-  { id: "gemini", name: "Gemini 3.5 Flash", callFn: callGeminiForBattle, streamFn: callGeminiStream },
+  { id: "claude", name: MODEL_NAME, callFn: callClaudeForBattle, streamFn: callClaudeStream },
+  { id: "gpt", name: OPENAI_MODEL_NAME, callFn: callGPTForBattle, streamFn: callGPTStream },
+  { id: "perplexity", name: PERPLEXITY_MODEL_NAME, callFn: callPerplexityForBattle, streamFn: callPerplexityStream },
+  { id: "gemini", name: GEMINI_MODEL_NAME, callFn: callGeminiForBattle, streamFn: callGeminiStream },
 ];
 
 export const BATTLE_MODEL_IDS = BATTLE_MODELS.map((m) => m.id);

@@ -6,7 +6,7 @@ import express from "express";
 import cors from "cors";
 import compression from "compression";
 import cookieParser from "cookie-parser";
-import { NODE_ENV } from "./config/env.js";
+import { NODE_ENV, ALLOWED_ORIGINS } from "./config/env.js";
 import { log } from "./utils/logger.js";
 
 // Routes
@@ -54,27 +54,7 @@ app.use(compression({ level: 6, threshold: 1024 }));
 app.use(express.json({ limit: "100kb" }));
 app.use(cookieParser());
 
-// CORS
-const ALLOWED_ORIGINS = [
-  "http://localhost:3000",
-  "http://localhost:5173",
-  "http://localhost:8080",
-  "https://hohl.rocks",
-  "https://www.hohl.rocks",
-];
-
-// Dynamic origins from env
-if (process.env.ALLOWED_ORIGINS) {
-  process.env.ALLOWED_ORIGINS.split(',').forEach(origin => {
-    ALLOWED_ORIGINS.push(origin.trim());
-  });
-}
-
-// NOTE: previously this also allowed any *.netlify.app / *.railway.app origin
-// (for "preview deployments"). Combined with credentials:true, that let any
-// third party who spins up a free Netlify/Railway app make credentialed
-// cross-origin requests carrying the chat_session cookie. Preview deployment
-// URLs should instead be added explicitly via the ALLOWED_ORIGINS env var.
+// CORS - Liste siehe config/env.js
 app.use(cors({
   origin: function (origin, callback) {
     // Allow requests with no origin (mobile apps, curl, etc.)

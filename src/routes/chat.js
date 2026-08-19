@@ -14,8 +14,8 @@ import { log } from "../utils/logger.js";
 const router = Router();
 
 // This endpoint only ever calls Claude; "model" is accepted for forward
-// compatibility but must not be persisted unvalidated (it's logged to the
-// database as-is otherwise).
+// compatibility but is validated against this list before it reaches the
+// chat log - unvalidated it would be stored verbatim.
 const SUPPORTED_MODELS = ["claude"];
 
 router.post("/api/chat", generalRateLimit, async (req, res) => {

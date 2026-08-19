@@ -6,7 +6,7 @@ import { Router } from "express";
 import { NODE_ENV } from "../config/env.js";
 import { generalRateLimit, promptLibraryRateLimit } from "../middleware/rateLimit.js";
 import { callClaude } from "../services/ai-clients.js";
-import { sanitizePrompt, setCacheHeaders, sendError } from "../utils/helpers.js";
+import { sanitizePrompt, setCacheHeaders, sendError, parseJsonFromModel } from "../utils/helpers.js";
 import { createCache } from "../utils/cache.js";
 import { SPARKS_DATABASE } from "../data/prompts.js";
 import { getDailyNews } from "../services/news.js";
@@ -84,23 +84,7 @@ Sei kreativ! Wechsle zwischen verschiedenen Themen: Content, Strategie, Analyse,
 
     const responseText = await callClaude(systemPrompt, userPrompt, 2000);
 
-    // Parse JSON from response
-    let challenge;
-    try {
-      challenge = JSON.parse(responseText);
-    } catch (_parseErr) {
-      const jsonMatch = responseText.match(/```json\n([\s\S]+?)\n```/);
-      if (jsonMatch) {
-        challenge = JSON.parse(jsonMatch[1]);
-      } else {
-        const objectMatch = responseText.match(/{[\s\S]+}/);
-        if (objectMatch) {
-          challenge = JSON.parse(objectMatch[0]);
-        } else {
-          throw new Error("Could not parse JSON from response");
-        }
-      }
-    }
+    const challenge = parseJsonFromModel(responseText, "Daily-Challenge");
 
     log.debug(`Generated challenge: "${challenge.theme}"`);
 
@@ -191,22 +175,7 @@ Bewerte die Antwort und erstelle ein JSON-Objekt:
 
     const responseText = await callClaude(systemPrompt, userPrompt, 1500);
 
-    let evaluation;
-    try {
-      evaluation = JSON.parse(responseText);
-    } catch (_parseErr) {
-      const jsonMatch = responseText.match(/```json\n([\s\S]+?)\n```/);
-      if (jsonMatch) {
-        evaluation = JSON.parse(jsonMatch[1]);
-      } else {
-        const objectMatch = responseText.match(/{[\s\S]+}/);
-        if (objectMatch) {
-          evaluation = JSON.parse(objectMatch[0]);
-        } else {
-          throw new Error("Could not parse JSON from response");
-        }
-      }
-    }
+    const evaluation = parseJsonFromModel(responseText, "Challenge-Bewertung");
 
     log.debug(`Evaluation complete: ${evaluation.badge?.toUpperCase()} (${evaluation.score}%)`);
 
